@@ -1,0 +1,4 @@
+[Humans vs Clickers]
+en_name = Humans vs Clickers
+en_description = Blind clickers hunt by sound. Humans hide, stay quiet and survive until time runs out.
+path = echohunt.lua

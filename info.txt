@@ -1,0 +1,5 @@
+name = Humans vs Clickers
+author = AgeOfAlgorithms
+description = Multiplayer horror. Blind clickers hunt by sound - humans hide, stay quiet and survive.
+tags = Gameplay
+version = 2
