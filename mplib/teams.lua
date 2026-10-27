@@ -21,7 +21,7 @@ _COUNTDOWN = 2
 _LOCKED = 3
 _DONE = 4
 
-_COUNTDOWNTIME = 3.0
+_COUNTDOWNTIME = 4.0          -- (Humans vs Clickers: 4 s, the host can cancel it - AgeOfAlgorithms)
 _LOCKTIME = 2.5
 
 #include "script/include/player.lua"
@@ -559,7 +559,10 @@ function _teamsDrawTeamBox(teamId, width, height)
         if cs.lastTeam ~= team then cs.lastTeam, cs.switchT = team, GetTime() end
         local wait = TEAM_SWITCH_WAIT - (GetTime() - (cs.switchT or -100))
         local title = wait > 0 and string.format("Join (%d)", math.ceil(wait)) or "loc@UI_BUTTON_JOIN"
-        if uiDrawSecondaryButton(title, width - 2 * 8, team == teamId or locked or wait > 0) then
+        -- (and the clickers' Join while they're full: the host's "Max clickers" setting, shared.ehMaxClickers)
+        local full = teamId == 2 and shared.ehMaxClickers and #players >= shared.ehMaxClickers
+        if uiDrawSecondaryButton(full and team ~= teamId and not locked and wait <= 0 and "Full" or title, width - 2 * 8,
+            team == teamId or locked or wait > 0 or full) then
             cs.switchT = GetTime()
             ServerCall("server._teamsJoinTeam", GetLocalPlayer(), teamId)
         end

@@ -73,11 +73,17 @@ BREATH = {idle = {3.4, 0.25}, walk = {2.3, 0.45}, run = {0.85, 0.9}}
 BREATH_OWN = 0.5      -- the monster hears its own breathing this much quieter (at its eyes)
 MCALL_MIN, MCALL_MAX = 15, 30  -- s between the monster's calls (wet clicking or a hiss), everyone hears them (6-14: too often)
 STEP_SPEED = 1.5      -- m/s: walking faster than this makes footsteps (not while crouched)
-HEAR_MIN = 0.15       -- GetLastSound volume that can be heard at all (a remote player's footsteps read ~0.05)
+HEAR_SCORE_MIN = 1.0  -- a world sound is heard when its score - its loudness at the clicker, volume x HEAR_PER_VOL / distance
+                      -- - is at least this: no volume floor, a quiet sound close counts (AgeOfAlgorithms; was: volume
+                      -- 0.15 at least). (A remote player's footsteps read ~0.05: heard within 3 m)
 HEAR_PER_VOL = 60     -- m a sound of volume 1 carries: louder = heard further. GetLastSound's volume is the sound's own,
                       -- not by distance (autotest 2026-10-18: holes 0.30-0.53, a dropped crate 0.22, a bullet impact
                       -- 0.52, explosions 1.3 (size 0.5) and 4.9 (size 1.5); the same hole at 11 and 26 m read the same)
 HEAR_MAX = 150        -- m at most (breaking, impacts)
+HEAR_WINDOW = 0.2     -- s of world sounds weighed together (AgeOfAlgorithms; in seconds, not frames, so a host at 30 fps
+                      -- shows the same: the engine reports one sound per frame, half as many then) ...
+HEAR_TOP = 4          -- ... and the strongest this many of each window shown (AgeOfAlgorithms)
+HEAR_APART = 1.5      -- m: not two of a window right next to each other (a loop, a wall's pieces: the same spot)
 -- explosions (volume >= BURST_VOL) carry much further (AgeOfAlgorithms): BOOM_BASE + BOOM_PER_VOL x volume, at most BOOM_MAX -
 -- a small one (1.3) ~170 m, a big one (4.9) 300 m
 BOOM_BASE, BOOM_PER_VOL, BOOM_MAX = 120, 40, 300
@@ -90,6 +96,9 @@ TOOL_NOISE = {
 	rifle = {r = 160, loud = 1.0, clip = "gun"},
 	rocket = {r = 200, loud = 1.0, clip = "gun"},
 	sledge = {r = 25, loud = 0.5, clip = "thud"},
+	plank = {r = 45, loud = 0.4, clip = "ripple", aim = true},   -- (45 m, a pale ring where it is nailed, like a world sound:
+	                                                      --  not the human's shape - AgeOfAlgorithms; it had the default, 80 m like a gun)
+	eh_noisemaker = {r = 0, loud = 0, clip = "ripple"},    -- (throwing it: silent to the clickers - AgeOfAlgorithms; eh_decoy.lua)
 	blowtorch = {r = 15, loud = 0.3, clip = "thud", hold = true},
 	extinguisher = {r = 12, loud = 0.3, clip = "thud", hold = true},
 	leafblower = {r = 20, loud = 0.4, clip = "thud", hold = true},
@@ -113,7 +122,9 @@ HEART_R = 30          -- m: humans this close are heard (15: hardly ever - AgeOf
 HEART_FAST_R = 8      -- m: closer than this a heart races
 HEART_GLOW_R = 200    -- m: standing still it also sees a faint red glow toward each human this close (AgeOfAlgorithms)
 HEART_GLOW_STILL = 7  -- s still before the glow starts (AgeOfAlgorithms; the heartbeats' sound: HEART_STILL)
-HEART_GLOW_EVERY = 7  -- s between its pulses
+HEART_GLOW_FAST = 3.5 -- s between a human's pulses when they are within HEART_GLOW_NEAR ...
+HEART_GLOW_SLOW = 7   -- ... and from HEART_GLOW_FAR on, in between by distance (AgeOfAlgorithms: closer, faster)
+HEART_GLOW_NEAR, HEART_GLOW_FAR = 10, 100   -- m
 HEART_GLOW_LEN = 2.0  -- s a pulse lasts (in, then out to nothing)
 HEART_GLOW_SCATTER = 0.5    -- each pulse centred on a random point up to this share of the distance off (6-60 m), where
                             -- it stays (it doesn't follow them): a hint of the direction, not the position (AgeOfAlgorithms)
@@ -168,12 +179,13 @@ local dummies = {}         -- {pos, pose, nextNoise}
 local steps = {}           -- [player] = time of their next footstep ping
 local people = {}          -- other players this frame
 local hiddenNow = 0        -- how many humans are hidden this frame (HUD)
-local lastVol, lastVolT, lastRipT = 0, -100, -100
+local lastVol, lastVolT = 0, -100
 local snd = {}
 local camRaise = EYE_RAISE
 local camDip = nil          -- the mantle's pull-up dip, folded into the monster's camera
 local cam = nil            -- the monster's camera this frame
 EH_HEARD = false          -- a test hook: function(kind, distance, strength), called for everything the monster hears
+EH_GLOW = false           -- a test hook: function(player, period, distance), called when a heartbeat glow pulse starts
 local noiseSeen = nil      -- the last server noise event handled (shared.ehNoise.seq)
 local detected = {n = nil, t = -100}   -- this player detected by the pulse: when (the warning)
 local heart = {still = 0, level = 0, next = {}}   -- the monster's stillness, the heartbeats' fade, each human's next beat
@@ -1035,17 +1047,24 @@ local function hearNoises(eye)
 			local d = VecLength(VecSub(pos, eye))
 			if d <= e.r then
 				local st = noiseStrength(d, e.r, e.loud)
+				local who = IsPlayerValid(e.p) and not ehIsMonster(e.p) and e.p or nil
 				local body = 0                                           -- the thing that made it: the car, the gun
-				if IsPlayerValid(e.p) and e.clip ~= "voice" then         -- (a voice - talking, a cry of pain, a revive - is the
-				                                                     --  person: not their tool - AgeOfAlgorithms: a hurt human's wrench lit up)
-					local veh = GetPlayerVehicle(e.p)
-					if veh ~= 0 then body = GetVehicleBody(veh) else body = GetToolBody(e.p) end
-				end
-				if body ~= 0 then addBodyPing(body, st, GLOW)
-				elseif e.clip == "gun" then addGunPing(e.p, pos, st) end
-				if body == 0 or e.kind:sub(1, 5) == "tool_" then
-					addPose((IsPlayerValid(e.p) and capturePose(e.p, Vec(0, 0, 0))) or standPose(pos), st, GLOW, nil, nil,
-						IsPlayerValid(e.p) and not ehIsMonster(e.p) and e.p or nil)
+				if e.clip == "ripple" then                               -- like a world sound: a pale ring, nobody's shape
+					addRipple(pos, RIPPLE, e.loud, st)                   -- (planks - AgeOfAlgorithms)
+				elseif e.decoy then                                      -- a noisemaker: as if its thrower stood there and
+					addGunPing(0, pos, st)                               -- fired - a shape, their name (eh_decoy.lua)
+					addPose(standPose(pos), st, GLOW, nil, nil, who)
+				else
+					if IsPlayerValid(e.p) and e.clip ~= "voice" then     -- (a voice - talking, a cry of pain, a revive - is the
+					                                                     --  person: not their tool - AgeOfAlgorithms: a hurt human's wrench lit up)
+						local veh = GetPlayerVehicle(e.p)
+						if veh ~= 0 then body = GetVehicleBody(veh) else body = GetToolBody(e.p) end
+					end
+					if body ~= 0 then addBodyPing(body, st, GLOW)
+					elseif e.clip == "gun" then addGunPing(e.p, pos, st) end
+					if body == 0 or e.kind:sub(1, 5) == "tool_" then
+						addPose((IsPlayerValid(e.p) and capturePose(e.p, Vec(0, 0, 0))) or standPose(pos), st, GLOW, nil, nil, who)
+					end
 				end
 				if EH_HEARD then EH_HEARD(e.kind .. (body ~= 0 and "+body" or ""), d, st) end
 			end
@@ -1175,6 +1194,45 @@ local function inList(l, p)
 	return false
 end
 
+-- world sounds (breaking, debris, impacts, explosions) are highlighted as far as they are loud: a ripple there
+-- (explosions also a starburst). The engine reports only the loudest sound of each frame (GetLastSound), so the frames'
+-- sounds are gathered for HEAR_WINDOW s from the first one heard (those scoring at least HEAR_SCORE_MIN: their loudness at
+-- the clicker); when the window has passed, its HEAR_TOP highest scoring are shown where they were - not one right next to one already chosen - and the next
+-- window starts with the next sound (AgeOfAlgorithms: the true top 4, not the first that come; shown up to HEAR_WINDOW s
+-- late). An explosion is shown at once and isn't counted. (Was: at most one every 0.12 s, the first that came.)
+local worldWin = {t0 = nil, list = {}}                         -- the window being gathered: {pos, vol, st, d}
+local function showWorld(h)
+	addRipple(h.pos, RIPPLE, h.vol, h.st)
+	if EH_HEARD then EH_HEARD(string.format("world%.2f", h.vol), h.d, h.st) end
+end
+local function hearWorld(vol, pos, eye, now)
+	if worldWin.t0 and now - worldWin.t0 >= HEAR_WINDOW then      -- the window has passed: its strongest
+		table.sort(worldWin.list, function(a, b) return a.score > b.score end)
+		local chosen = {}
+		for _, h in ipairs(worldWin.list) do
+			if #chosen >= HEAR_TOP then break end
+			local near = false
+			for _, c in ipairs(chosen) do if VecLength(VecSub(c.pos, h.pos)) < HEAR_APART then near = true end end
+			if not near then chosen[#chosen + 1] = h; showWorld(h) end
+		end
+		worldWin.t0, worldWin.list = nil, {}
+	end
+	if not vol or vol <= 0 then return end
+	local boom = vol >= BURST_VOL
+	local reach = boom and math.min(BOOM_MAX, BOOM_BASE + BOOM_PER_VOL * vol) or math.min(HEAR_MAX, vol * HEAR_PER_VOL)
+	local d = VecLength(VecSub(pos, eye))
+	local score = vol * HEAR_PER_VOL / math.max(d, 1)               -- (its loudness here: louder and closer score higher)
+	if d > reach or (not boom and score < HEAR_SCORE_MIN) then return end
+	local h = {pos = pos, vol = vol, st = noiseStrength(d, reach, math.min(1, vol / 1.5)), d = d, score = score}
+	if boom then                                                  -- (an explosion: at once)
+		showWorld(h)
+		addBurst(pos, vol, noiseStrength(d, reach, 1))
+		return
+	end
+	worldWin.t0 = worldWin.t0 or now
+	worldWin.list[#worldWin.list + 1] = h
+end
+
 function ehClientTick(dt, ms)
 	local now = GetTime()
 	local me = GetLocalPlayer()
@@ -1213,18 +1271,7 @@ function ehClientTick(dt, ms)
 	fogApply(eye, (EH_BENCH and EH_BENCH.clear) or pulseClear(now), dt)
 	hideHumans()
 
-	-- world sounds (breaking, debris, impacts, explosions) are highlighted as far as they are loud: a ripple there
-	-- (explosions also a starburst); at most one every 0.12 s
-	if vol >= HEAR_MIN and now - lastRipT > 0.12 then
-		local reach = (vol >= BURST_VOL) and math.min(BOOM_MAX, BOOM_BASE + BOOM_PER_VOL * vol) or math.min(HEAR_MAX, vol * HEAR_PER_VOL)
-		local d = VecLength(VecSub(pos, eye))
-		if d <= reach then
-			lastRipT = now
-			addRipple(pos, RIPPLE, vol, noiseStrength(d, reach, math.min(1, vol / 1.5)))
-			if vol >= BURST_VOL then addBurst(pos, vol, noiseStrength(d, reach, 1)) end
-			if EH_HEARD then EH_HEARD(string.format("world%.2f", vol), d, noiseStrength(d, reach, math.min(1, vol / 1.5))) end
-		end
-	end
+	hearWorld(vol, pos, eye, now)
 
 	-- other players' footsteps, silent while crouched (the game mode will do this on the server)
 	for i = 1, #people do
@@ -1409,58 +1456,73 @@ local function drawReveals(now)
 	end
 end
 
--- standing still HEART_GLOW_STILL s: every HEART_GLOW_EVERY s a short faint pulse of red glow toward each human within
--- HEART_GLOW_R - very wide, fainter the farther, centred on a point scattered around them anew each pulse, at the
--- screen's edge when off screen or behind (AgeOfAlgorithms)
+-- standing still HEART_GLOW_STILL s: a short faint pulse of red glow toward each human within HEART_GLOW_R, each in its own
+-- rhythm - every HEART_GLOW_FAST s close, HEART_GLOW_SLOW s far (AgeOfAlgorithms) - very wide, fainter the farther, centred
+-- on a point scattered around them anew each pulse, at the screen's edge when off screen or behind (AgeOfAlgorithms)
 -- (client) seconds this machine's monster has stood still (the heartbeats come at HEART_STILL)
 function ehHeartStill() return heart.still end
 
+local function glowPeriod(d)
+	local k = clamp((d - HEART_GLOW_NEAR) / (HEART_GLOW_FAR - HEART_GLOW_NEAR), 0, 1)
+	return HEART_GLOW_FAST + (HEART_GLOW_SLOW - HEART_GLOW_FAST) * k
+end
+
+-- a pulse's spot: where the human is now, scattered (it doesn't follow them: a hint of the direction, not the position)
+local function glowSpot(real, d)
+	local r = math.max(6, math.min(60, d * HEART_GLOW_SCATTER)) * math.sqrt(math.random())
+	local a = math.random() * 2 * math.pi
+	return VecAdd(real, Vec(math.cos(a) * r, (math.random() - 0.5) * r * 0.2, math.sin(a) * r))
+end
+
+local function drawGlowAt(at, env)
+	local w, h, m = UiWidth(), UiHeight(), 40
+	local d = VecLength(VecSub(at, cam.pos))
+	local x, y, dist = UiWorldToPixel(at)
+	if dist <= 0 or x < m or x > w - m or y < m or y > h - m then
+		local cx, cy = w / 2, h / 2
+		local dx, dy = x - cx, y - cy
+		if dist <= 0 then dx, dy = -dx, -dy end
+		if math.abs(dx) < 1 and math.abs(dy) < 1 then dy = 1 end
+		local k = math.min((w / 2 - m) / math.max(math.abs(dx), 1e-3), (h / 2 - m) / math.max(math.abs(dy), 1e-3))
+		x, y = cx + dx * k, cy + dy * k
+	end
+	local near = math.max(0, 1 - d / HEART_GLOW_R)
+	local r = 350 + 800 * near                                      -- (huge: a wash of colour, not a marker)
+	local c = HEART_COL
+	UiPush()
+	UiTranslate(x, y)
+	UiAlign("center middle")
+	for k = 1, 6 do                                                 -- (soft edges: barely there)
+		UiColor(c[1], c[2], c[3], env * 0.0025 * k * (0.25 + 0.75 * near))   -- (a little deeper than 0.0018 - AgeOfAlgorithms)
+		UiCircle(r * (1.3 - k * 0.15))
+	end
+	UiPop()
+end
+
 local function drawHeartGlow(now)
-	if heart.still < HEART_GLOW_STILL or not cam then heart.glowN = nil; return end
-	local since = heart.still - HEART_GLOW_STILL
-	local n = math.floor(since / HEART_GLOW_EVERY)
-	local age = since - n * HEART_GLOW_EVERY
-	if age > HEART_GLOW_LEN then return end
-	if heart.glowN ~= n then                                     -- a new pulse: where each human is now, scattered, fixed
-		heart.glowN, heart.spots = n, {}
-		for i = 1, #people do
-			local p = people[i]
-			if GetPlayerHealth(p) > 0 then
-				local real = VecAdd(GetPlayerTransform(p).pos, Vec(0, 1.2, 0))
-				local d = VecLength(VecSub(real, cam.pos))
-				if d <= HEART_GLOW_R then
-					local r = math.max(6, math.min(60, d * HEART_GLOW_SCATTER)) * math.sqrt(math.random())
-					local a = math.random() * 2 * math.pi
-					heart.spots[#heart.spots + 1] = VecAdd(real, Vec(math.cos(a) * r, (math.random() - 0.5) * r * 0.2, math.sin(a) * r))
+	if heart.still < HEART_GLOW_STILL or not cam then heart.glow = nil; return end
+	heart.glow = heart.glow or {}                                   -- [player] = {t0 = this pulse's start, period, spot}
+	local alive = {}
+	for i = 1, #people do
+		local p = people[i]
+		if GetPlayerHealth(p) > 0 then
+			local real = VecAdd(GetPlayerTransform(p).pos, Vec(0, 1.2, 0))
+			local d = VecLength(VecSub(real, cam.pos))
+			if d <= HEART_GLOW_R then
+				alive[p] = true
+				local g = heart.glow[p]
+				if not g or now - g.t0 >= g.period then                -- a new pulse: its rhythm by how far they are now
+					g = {t0 = now, period = glowPeriod(d), spot = glowSpot(real, d)}
+					heart.glow[p] = g
+					if EH_GLOW then EH_GLOW(p, g.period, d) end              -- (the offline tests count them)
 				end
+				local len = math.min(HEART_GLOW_LEN, g.period * 0.55)
+				local age = now - g.t0
+				if age <= len then drawGlowAt(g.spot, math.sin(math.pi * age / len) ^ 2) end   -- (in, then out to nothing)
 			end
 		end
 	end
-	local env = math.sin(math.pi * age / HEART_GLOW_LEN) ^ 2       -- (0 at both ends: in, then out to nothing)
-	local w, h, m = UiWidth(), UiHeight(), 40
-	for _, at in ipairs(heart.spots or {}) do
-		local d = VecLength(VecSub(at, cam.pos))
-		local x, y, dist = UiWorldToPixel(at)
-		if dist <= 0 or x < m or x > w - m or y < m or y > h - m then
-			local cx, cy = w / 2, h / 2
-			local dx, dy = x - cx, y - cy
-			if dist <= 0 then dx, dy = -dx, -dy end
-			if math.abs(dx) < 1 and math.abs(dy) < 1 then dy = 1 end
-			local k = math.min((w / 2 - m) / math.max(math.abs(dx), 1e-3), (h / 2 - m) / math.max(math.abs(dy), 1e-3))
-			x, y = cx + dx * k, cy + dy * k
-		end
-		local near = math.max(0, 1 - d / HEART_GLOW_R)
-		local r = 350 + 800 * near                                  -- (huge: a wash of colour, not a marker)
-		local c = HEART_COL
-		UiPush()
-		UiTranslate(x, y)
-		UiAlign("center middle")
-		for k = 1, 6 do                                             -- (soft edges: barely there)
-			UiColor(c[1], c[2], c[3], env * 0.0025 * k * (0.25 + 0.75 * near))   -- (a little deeper than 0.0018 - AgeOfAlgorithms)
-			UiCircle(r * (1.3 - k * 0.15))
-		end
-		UiPop()
-	end
+	for p in pairs(heart.glow) do if not alive[p] then heart.glow[p] = nil end end
 end
 
 -- the stamina bar (bottom centre): shown while running or not full; red while exhausted
@@ -1529,12 +1591,14 @@ local nextHold, nextVeh = {}, {}
 
 local emitNoise
 -- (eh_combat.lua) a noise the monsters hear and see: a hurt human's cry, a revive
-function ehEmitNoise(p, kind, pos, r, loud, clip) emitNoise(p, kind, pos, r, loud, clip) end
+function ehEmitNoise(p, kind, pos, r, loud, clip, decoy) emitNoise(p, kind, pos, r, loud, clip, decoy) end
 
-function emitNoise(p, kind, pos, r, loud, clip)
+-- decoy: made by something p left there (eh_decoy.lua's noisemaker), shown as if p stood there
+function emitNoise(p, kind, pos, r, loud, clip, decoy)
 	noiseQ.seq = noiseQ.seq + 1
 	local l = noiseQ.list
-	l[#l + 1] = {seq = noiseQ.seq, p = p, kind = kind, x = pos[1], y = pos[2], z = pos[3], r = r, loud = loud, clip = clip}
+	l[#l + 1] = {seq = noiseQ.seq, p = p, kind = kind, x = pos[1], y = pos[2], z = pos[3], r = r, loud = loud, clip = clip,
+		decoy = decoy or nil}
 	while #l > 16 do table.remove(l, 1) end
 	local copy = {}
 	for i = 1, #l do copy[i] = l[i] end
@@ -1589,7 +1653,16 @@ local function humanNoises(monsters)
 					else
 						fire = InputPressed("usetool", q)
 					end
-					if fire then emitNoise(q, "tool_" .. tool, pos, n.r, n.loud, n.clip) end
+					if fire and n.r > 0 then
+						local at = pos
+						if n.aim then                                -- (where they are working: what they look at, in reach)
+							local eye = GetPlayerEyeTransform(q)
+							QueryRejectPlayer(q)
+							local hit, d = QueryRaycast(eye.pos, QuatRotateVec(eye.rot, Vec(0, 0, -1)), 4)
+							at = VecAdd(eye.pos, VecScale(QuatRotateVec(eye.rot, Vec(0, 0, -1)), hit and d or 1.5))
+						end
+						emitNoise(q, "tool_" .. tool, at, n.r, n.loud, n.clip)
+					end
 				end
 			end
 		end

@@ -5,12 +5,14 @@
 #include "mplib/util.lua"
 #include "mplib/spawn.lua"
 #include "script/include/player.lua"
+#include "script/toolanimation.lua"
 #include "mantle.lua"
 #include "monster_rig.lua"
 #include "monster_anim.lua"
 #include "monster_visual.lua"
 #include "eh_combat.lua"
 #include "eh_monster.lua"
+#include "eh_decoy.lua"
 
 -- Echo Hunt: the game mode (gamemodes.txt; playable on any map: the map's spawn points or generated ones).
 -- Lobby: teams Humans / Monster (mplib), host settings (round time, head start, time of day). A round: the humans
@@ -26,9 +28,11 @@
 
 TEAM_HUMANS, TEAM_MONSTER = 1, 2
 HUD_SCOREBOARD_KEY = "l"     -- (mplib/hud.lua: the scoreboard on L - the game's "scoreboard" is Shift, the monster's run; AgeOfAlgorithms)
-HUMAN_LOADOUT = {{"gun", 12}, {"sledge", 0}, {"plank", 5}}   -- (5 planks: AgeOfAlgorithms)
+HUMAN_LOADOUT = {{"gun", 12}, {"sledge", 0}, {"plank", 5}}   -- (5 planks: AgeOfAlgorithms) - and maybe a noisemaker:
+NOISEMAKER_CHANCE = 0.5      -- each human's chance to start with one (AgeOfAlgorithms: randomness is exciting) - at least
+                             -- one human has it and never all of them; a lone human always does
 MONSTER_LOADOUT = {}
-MAX_MONSTERS = 6             -- (at most; at least one player always stays human)
+MAX_MONSTERS = 11            -- (at most; at least one player always stays human)
 CAUGHT_SHOW = 4              -- s the "<name> was caught" line stays
 
 ROUND_KEY = "savegame.mod.eh.roundsec"   -- (renamed with the 30 s steps: an old saved choice meant another time)
@@ -47,6 +51,8 @@ end
 ROUND_OPTIONS = steps(60, 1200, 30, 300, function(v) return string.format("%d:%02d", math.floor(v / 60), v % 60) end)
                                                              -- 1-20 min by 30 s (AgeOfAlgorithms), 5:00 first
 HEAD_OPTIONS = steps(5, 120, 5, 30, function(v) return v .. " s" end)               -- 5-120 s by 5 (AgeOfAlgorithms), 30 first
+MAXC_KEY = "savegame.mod.eh.maxclickers"
+MAXC_OPTIONS = steps(1, 11, 1, 2, function(v) return tostring(v) end)                 -- 1-11 (1 human vs 11: AgeOfAlgorithms), 2 first
 
 SETTINGS = {
 	{
@@ -59,6 +65,8 @@ SETTINGS = {
 			{key = "savegame.mod.eh.weather", label = "Time of day", info = "For everyone (the map's own: leave it as it is)",
 				options = {{label = "Night", value = "night"}, {label = "Evening", value = "sunset"}, {label = "Day", value = "sunny"},
 					{label = "Foggy", value = "foggy"}, {label = "Rainy night", value = "rainynight"}, {label = "The map's own", value = "map"}}},
+			{key = MAXC_KEY, label = "Max clickers", info = "More clickers than this in the lobby: the newest join the humans",
+				options = MAXC_OPTIONS},
 			{key = "savegame.mod.eh.globalchat", label = "Global chat in round", info = "Off: only nearby talk (and the dead's chat) once the round starts",
 				options = {{label = "On", value = "on"}, {label = "Off", value = "off"}}},
 		},
@@ -72,6 +80,13 @@ local G = {phase = "lobby", t = 0, monsters = {}, winner = "", roundTime = 300, 
 local spawnsHumans, spawnsMonster = {}, {}
 EH_OUT = G.out                                                   -- (eh_combat.lua: caught humans can't be grabbed)
 
+-- each player's wins and losses this session (AgeOfAlgorithms), in the registry like the tally (Play Again restarts the
+-- script; it lasts until the host quits the game), by name: someone who leaves and rejoins keeps theirs
+local function wlKey(p)                                         -- (any other character as its code: names in other
+	return "echohunt.wl." .. (GetPlayerName(p):gsub("[^%w]", function(c) return string.format("_%02x", c:byte()) end))   --  scripts stay apart)
+end
+function ehWinsLosses(p) local k = wlKey(p); return GetInt(k .. ".w"), GetInt(k .. ".l") end
+
 local function publish(force)
 	local now = GetTime()
 	if not force and now - G.pubT < 0.2 then return end          -- (the clock: 5 times a second is enough)
@@ -82,11 +97,13 @@ local function publish(force)
 	local catches, stats = {}, {}
 	for p, n in pairs(ehCombatCatches()) do catches[p] = n end
 	for p, t in pairs(ehCombatStats()) do stats[p] = {t.downs, t.kills, t.revives, math.floor(t.dmg + 0.5)} end
+	local wl = {}
+	for p in Players() do local w, l = ehWinsLosses(p); wl[p] = {w, l} end
 	local monsters, mspawns = {}, {}
 	for i, m in ipairs(G.monsters) do monsters[i] = m end
 	for i, v in ipairs(G.mspawns or {}) do mspawns[i] = v end
 	shared.eh = {phase = G.phase, t = G.t, monsters = monsters, monster = monsters[1] or 0, winner = G.winner,
-		roundTime = G.roundTime, out = out, late = late, catches = catches, stats = stats, mspawns = mspawns, tally = {h = GetInt("echohunt.tally.h"), m = GetInt("echohunt.tally.m")}}
+		roundTime = G.roundTime, out = out, late = late, catches = catches, stats = stats, wl = wl, mspawns = mspawns, tally = {h = GetInt("echohunt.tally.h"), m = GetInt("echohunt.tally.m")}}
 end
 
 function server.init()
@@ -103,6 +120,7 @@ function server.init()
 	spawnSetRespawnTime(99999)                                   -- (nobody comes back during a round)
 	spawnSetDefaultLoadout(HUMAN_LOADOUT)
 	ehServerInit()
+	ehDecoyServerInit()                                           -- (eh_decoy.lua: the noisemaker tool)
 	publish(true)
 end
 
@@ -182,6 +200,28 @@ end
 
 -- the teams are set: the monsters (a random one if nobody chose it; one player always stays human), everyone placed,
 -- the head start begins
+-- who starts with a noisemaker (eh_decoy.lua): each human by NOISEMAKER_CHANCE; nobody - a random one gets it, everybody -
+-- a random one doesn't; one human alone: they do. A set of players
+function noisemakerDraw(humans)
+	local n, got, has = #humans, {}, 0
+	if n == 1 then got[humans[1]] = true end
+	if n < 2 then return got end
+	for _, p in ipairs(humans) do
+		if math.random() < NOISEMAKER_CHANCE then got[p] = true; has = has + 1 end
+	end
+	if has == 0 then got[humans[math.random(1, n)]] = true
+	elseif has == n then got[humans[math.random(1, n)]] = nil end
+	return got
+end
+
+-- a human's starting tools
+local function humanLoadout(noisemaker)
+	local l = {}
+	for i, t in ipairs(HUMAN_LOADOUT) do l[i] = t end
+	if noisemaker then l[#l + 1] = {DECOY_TOOL, 1} end
+	return l
+end
+
 local function beginRound()
 	-- (Lua's random is never seeded: every launch drew the same "random" spawns - AgeOfAlgorithms kept starting at the same places
 	--  on Cullington. Seeded from the moment Start was pressed and a count of the rounds ever begun)
@@ -196,17 +236,17 @@ local function beginRound()
 		local k = math.random(1, #humans)
 		monsters[1] = table.remove(humans, k)
 	end
-	while #monsters > MAX_MONSTERS or (#humans == 0 and #monsters > 1) do humans[#humans + 1] = table.remove(monsters) end
+	while #monsters > maxClickers() or (#humans == 0 and #monsters > 1) do humans[#humans + 1] = table.remove(monsters) end
 	teamsSetTeams({humans, monsters})
 	G.monsters = monsters
 	G.humans = #humans
 	if G.weather ~= "map" then applyWeather(G.weather) end
-	local used = {}
+	local used, noisemakers = {}, noisemakerDraw(humans)
 	local order = shuffled(spawnsHumans)                       -- (different spawns every game: AgeOfAlgorithms)
 	for i, p in ipairs(humans) do
 		local t = #order > 0 and order[(i - 1) % #order + 1] or nil
 		used[#used + 1] = t
-		spawnSpawnPlayer(clearSpawn(t, 1.9), HUMAN_LOADOUT, p)
+		spawnSpawnPlayer(clearSpawn(t, 1.9), humanLoadout(noisemakers[p]), p)
 	end
 	G.mspawns = {}
 	local ts = monsterSpawns(used, #monsters)
@@ -220,6 +260,7 @@ local function beginRound()
 	for p in Players() do G.roster[p] = true end
 	G.winner = ""
 	ehCombatReset()
+	ehDecoyReset()
 	G.phase, G.t = "hide", G.headStart
 	publish(true)
 end
@@ -228,6 +269,12 @@ local function endRound(winner)
 	G.phase, G.winner, G.t = "over", winner, 0
 	local k = winner == "humans" and "echohunt.tally.h" or "echohunt.tally.m"   -- (the session's: survives Play Again)
 	SetInt(k, GetInt(k) + 1)
+	for p in pairs(G.roster) do                                  -- everyone who played the round: a win or a loss for their side
+		if IsPlayerValid(p) and not G.late[p] then
+			local kp = wlKey(p) .. (((winner == "humans") ~= isMonster(p)) and ".w" or ".l")
+			SetInt(kp, GetInt(kp) + 1)
+		end
+	end
 	publish(true)
 end
 
@@ -250,6 +297,33 @@ end
 
 -- a player arriving in the lobby joins the humans at once (AgeOfAlgorithms: unassigned players weren't listed - he couldn't see
 -- who was in the lobby); once only, so whoever picks the clickers or leaves a team stays that way
+-- (server) the host's "Max clickers" (at most MAX_MONSTERS)
+function maxClickers()
+	local n = math.floor(tonumber(GetString(MAXC_KEY)) or 2)
+	return math.max(1, math.min(MAX_MONSTERS, n))
+end
+
+-- in the lobby: more clickers than the host allows - the newest (last joined) go to the humans (AgeOfAlgorithms); the
+-- clickers' Join reads "Full" meanwhile (mplib/teams.lua, shared.ehMaxClickers)
+local function lobbyClickerCap()
+	local n = maxClickers()
+	if shared.ehMaxClickers ~= n then shared.ehMaxClickers = n end
+	local ts = shared._teamState
+	if not ts or ts.state ~= _WAITING or not ts.teams[TEAM_MONSTER] then return end
+	local list = ts.teams[TEAM_MONSTER].players
+	for i = #list, n + 1, -1 do server._teamsJoinTeam(list[i], TEAM_HUMANS) end
+end
+
+-- (server, the host's Cancel) the start called off during its countdown or the "starting" moment after: back to the
+-- lobby, teams open, the Start button back (AgeOfAlgorithms)
+function server.ehCancelStart()
+	local ts = shared._teamState
+	if not ts or not (ts.state == _COUNTDOWN or ts.state == _LOCKED) then return end
+	ts.state = _WAITING
+	_teamState.stateTime = 0
+	shared._hud.gameIsSetup = false
+end
+
 local autoJoined = {}
 local function lobbyAutoJoin()
 	if teamsIsSetup() then return end
@@ -264,6 +338,7 @@ end
 function server.tick(dt)
 	SetFloat("echohunt.probe.globals", GetTime())               -- (on the Echo Hunt test level its TEST copy steps aside)
 	lobbyAutoJoin()
+	lobbyClickerCap()
 	if teamsTick(dt) then beginRound() end
 	chatKeys()
 	if not teamsIsSetup() then
@@ -288,9 +363,11 @@ function server.tick(dt)
 		for _, m in ipairs(G.monsters) do if IsPlayerValid(m) then DisablePlayerInput(m) end end   -- (frozen and blind while they hide)
 		if G.t <= 0 then G.phase, G.t, G.huntT0 = "hunt", G.roundTime, GetTime(); publish(true) end
 		ehServerTick(dt, G.monsters, false)
+		ehDecoyServerTick(true)
 	elseif G.phase == "hunt" then
 		G.t = G.t - dt
 		ehServerTick(dt, G.monsters, true)
+		ehDecoyServerTick(true)
 		local left, any, mons = 0, false, 0
 		for _, m in ipairs(G.monsters) do if IsPlayerValid(m) then mons = mons + 1 end end
 		for p in Players() do
@@ -308,6 +385,7 @@ function server.tick(dt)
 		elseif G.t <= 0 then endRound("humans") end
 	else
 		ehServerTick(dt, {}, false)
+		ehDecoyServerTick(false)                                 -- (no throws; ones still out finish and are cleared)
 		for p in Players() do DisablePlayerInput(p) end
 	end
 	publish(false)
@@ -323,6 +401,7 @@ local C = {caughtN = nil, caughtT = -100, caughtName = ""}
 
 function client.init()
 	ehClientInit()
+	ehDecoyClientInit()
 end
 
 function client.destroy()
@@ -362,6 +441,7 @@ function client.tick(dt)
 	SetFloat("echohunt.probe.globalc", GetTime())               -- (on the Echo Hunt test level its TEST copy steps aside)
 	hudTick(dt)
 	teamsSetTags()
+	ehDecoyClientTick(dt)                                         -- (the noisemakers: held, and their shots heard everywhere)
 	local e = shared.eh
 	local round = e and (e.phase == "hide" or e.phase == "hunt") or false
 	if GetBool("level.hidenameplates") ~= round then SetBool("level.hidenameplates", round) end   -- (ours: drawNames)
@@ -508,21 +588,23 @@ local function scoreGroups(e, results)
 	}
 	for p in Players() do
 		local st = (e.stats or {})[p] or {0, 0, 0, 0}             -- (downs, kills, revives, damage dealt - AgeOfAlgorithms)
-		local nums = {tostring(st[1]), tostring(st[2]), tostring(st[3]), tostring(st[4])}
+		local wl = (e.wl or {})[p] or {0, 0}                      -- (this session's wins and losses - AgeOfAlgorithms)
+		local nums = {tostring(st[1]), tostring(st[2]), tostring(st[3]), tostring(st[4]), tostring(wl[1]), tostring(wl[2])}
 		if isMonsterOf(e, p) then
-			groups[2].rows[#groups[2].rows + 1] = {player = p, columns = {"-", nums[1], nums[2], nums[3], nums[4]}}
+			groups[2].rows[#groups[2].rows + 1] = {player = p, columns = {"-", nums[1], nums[2], nums[3], nums[4], nums[5], nums[6]}}
 		else
 			local o = e.out and e.out[p]
 			local status = (e.late and e.late[p]) and "joined late" or o and ("caught at " .. clock(o))
 				or (not results and ehIsDown(p) and "downed") or (results and "survived" or "hiding")
-			groups[1].rows[#groups[1].rows + 1] = {player = p, columns = {status, nums[1], nums[2], nums[3], nums[4]}}
+			groups[1].rows[#groups[1].rows + 1] = {player = p, columns = {status, nums[1], nums[2], nums[3], nums[4], nums[5], nums[6]}}
 		end
 	end
 	return groups
 end
 
 local SCORE_COLUMNS = {{name = "Status", align = "center"}, {name = "Downs", align = "center"}, {name = "Kills", align = "center"},
-	{name = "Revives", align = "center"}, {name = "Damage", align = "center"}}
+	{name = "Revives", align = "center"}, {name = "Damage", align = "center"}, {name = "Wins", align = "center"},
+	{name = "Losses", align = "center"}}
 
 local function drawHunt(e, me)
 	hudDrawTimer(e.t, 1.0)
@@ -606,6 +688,15 @@ function client.draw(dt)
 		UiPush()
 		if opening then UiDisableInput() end                     -- (this frame's Enter is the chat's, not a button's)
 		teamsDraw(dt)
+		local ts = shared._teamState
+		if IsPlayerHost(GetLocalPlayer()) and ts and (ts.state == _COUNTDOWN or ts.state == _LOCKED) then
+			UiPush()                                                 -- (below the countdown line: the team panel ends at
+			UiTranslate(UiCenter() - 110, UiMiddle() + 420)          --  +294, its line sits at +368)
+			UiAlign("left top")
+			UiFont(FONT_BOLD, FONT_SIZE_20)
+			if uiDrawSecondaryButton("Cancel start", 220) then ServerCall("server.ehCancelStart") end
+			UiPop()
+		end
 		if not hudGameIsSetup() then
 			if hudDrawGameSetup(SETTINGS) and not opening then
 				ServerCall("server.start", {roundTime = GetFloat(ROUND_KEY), headStart = GetFloat(HEAD_KEY),

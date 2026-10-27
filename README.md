@@ -12,7 +12,10 @@ press Start. Players who don't pick a team join the humans; if nobody picks the 
 
 ### Humans
 
-- Start with a gun, a sledgehammer and 5 planks. Hide, barricade, fight back.
+- Start with a gun, a sledgehammer and 5 planks. Hide, barricade, fight back. About half the humans also get a noisemaker
+  (a coin flip each round; always at least one of you, never everyone).
+- The noisemaker is a decoy: throw it, and where it lands it fires gunshots for 7 seconds. To a clicker it looks like you
+  shooting from there.
 - Every sound you make can give you away: footsteps (crouch-walk to move silently), gunshots, tools, vehicles, talking.
 - A clicker's strike takes half your health; at zero you are **downed** and crawl. A teammate holding **E** next to
   you for 5 seconds helps you up. If nobody does, you bleed out.
