@@ -1,0 +1,19 @@
+<prefab version="1.6.0">
+	<group name="instance=MOD/prefab/goo.xml" pos="0 0 0" rot="0.0 0.0 0.0">
+		<group name="eye_space">
+			<location name="fp_action" tags="name=fp_action" pos="0.3 -0.35 -0.4" rot="0.0 0.0 -10.0"/>
+			<location name="tp_action" tags="name=tp_action" pos="0.35 -0.1 -0.45"/>
+			<location name="tp_action_crouch" tags="name=tp_action_crouch" pos="0.35 -0.2 -0.35"/>
+			<location name="tp_run" tags="name=tp_run" pos="0.35 -0.35 -0.3" rot="10 10 -10"/>
+			<location name="tp_jump" tags="name=tp_jump" pos="0.4 -0.275 -0.325" rot="20.0 5 10"/>
+			<location name="tp_crouch" tags="name=tp_crouch" pos="0.375 -0.55 -0.1" rot="-20 -10 20"/>
+			<location name="tp_swim" tags="name=tp_swim" pos="0.35 -0.35 -0.35" rot="10.0 5 10"/>
+		</group>
+		<group name="tool_space">
+			<body dynamic="false">
+				<vox texture="12 0.65" file="MOD/vox/goo_grenade.vox" scale="0.5"/>
+			</body>
+			<location name="tp_action_rh" tags="name=tp_action_rh ik_hand" pos="0.0 0.0 -0.025" rot="0.0 90.0 0.0"/>
+		</group>
+	</group>
+</prefab>

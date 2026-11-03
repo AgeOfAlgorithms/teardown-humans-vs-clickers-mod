@@ -94,6 +94,11 @@ function ehMonsterList()
 	return l
 end
 
+-- (server) is p stuck in goo; a stuck clicker's strike went into it: eh_goo.lua replaces these (the vision probe has
+-- no goo)
+function ehGooTrapped(p) return false end
+function ehGooStrike(m) end
+
 function ehIsMonster(p)
 	if not p or p == 0 then return false end
 	local src = shared.ehMonsters
@@ -485,6 +490,11 @@ local function attack(m)
 	local st = CB[m]
 	local head, aim = monsterHead(m)
 	st.swingL = not st.swingL
+	if ehGooTrapped(m) then                                       -- (stuck in goo: every strike goes into it, AgeOfAlgorithms -
+		act(m, st.swingL and "swing_l" or "swing_r", true)        --  3 to break out; its claws would tear the cocoon apart at
+		ehGooStrike(m)                                            --  once, and it can't reach past the foam)
+		return
+	end
 	local veh, vq, vp = vehicleTarget(m, head, aim)
 	if veh and (CBG.vehArmor[veh] or VEH_ARMOR) > 0 then
 		act(m, st.swingL and "swing_l" or "swing_r", true)

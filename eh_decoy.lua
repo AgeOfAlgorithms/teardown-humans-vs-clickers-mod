@@ -21,6 +21,8 @@ DECOY_LAUNCH_TICKS = 2     -- ticks after the spawn its throw speed is set (set 
                            -- game the can dropped at the thrower's feet)
 
 local DS = {list = {}, away = {}, throwN = 0}
+EH_HELD_THROWABLES = {}   -- the tools its animator holds (eh_goo.lua adds the goo grenade)
+EH_HELD_THROWABLES[DECOY_TOOL] = true
 
 ----- server -----
 
@@ -44,11 +46,17 @@ local function throw(q)
 	local body
 	for _, en in ipairs(ents or {}) do if GetEntityType(en) == "body" then body = en end end
 	if not body then return end
-	DS.throwN = DS.throwN + 1                                     -- (its sound: the humans' machines only - the clickers
-	shared.ehThrow = {n = DS.throwN, x = at[1], y = at[2], z = at[3]}   --  never hear a throw, AgeOfAlgorithms)
+	ehThrowHeard(at)
 	local now = GetTime()
 	DS.list[#DS.list + 1] = {body = body, p = q, nextShot = now + DECOY_FUSE, stop = now + DECOY_FUSE + DECOY_TIME,
 		launch = VecAdd(VecScale(fwd, DECOY_THROW), Vec(0, DECOY_LOFT, 0)), launchN = DECOY_LAUNCH_TICKS}
+end
+
+-- (server) a throw from `at`: its sound on the humans' machines only - the clickers never hear a throw (AgeOfAlgorithms);
+-- the goo grenade's too
+function ehThrowHeard(at)
+	DS.throwN = DS.throwN + 1
+	shared.ehThrow = {n = DS.throwN, x = at[1], y = at[2], z = at[3]}
 end
 
 -- the gap to the next shot: mostly quick follow-ups (a burst), sometimes a pause - never a steady beat
@@ -113,7 +121,7 @@ end
 local animators = {}
 local function holdNoisemakers(dt)
 	for p in Players() do
-		if GetPlayerTool(p) == DECOY_TOOL then
+		if EH_HELD_THROWABLES[GetPlayerTool(p)] then
 			local ta = animators[p]
 			if not ta then                                          -- (tuned as the game's snowball, a throwable)
 				ta = ToolAnimator()

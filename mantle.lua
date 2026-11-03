@@ -167,7 +167,7 @@ function mantleServerUpdate(dt)
 			driveMantle(p, m, feet, dt)
 		else
 			local grounded = IsPlayerGrounded(p)
-			if m.cool <= 0 and GetPlayerVehicle(p) == 0 and not InputDown("crouch", p) then
+			if m.cool <= 0 and GetPlayerVehicle(p) == 0 and not InputDown("crouch", p) and not ehGooTrapped(p) then   -- (stuck in goo: eh_goo.lua)
 				local dir, wished = mMoveDir(p, v)
 				if dir and v[2] > -MANTLE_MAX_FALL then
 					local into = VecDot(Vec(v[1], 0, v[3]), dir)

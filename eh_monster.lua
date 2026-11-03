@@ -99,6 +99,7 @@ TOOL_NOISE = {
 	plank = {r = 45, loud = 0.4, clip = "ripple", aim = true},   -- (45 m, a pale ring where it is nailed, like a world sound:
 	                                                      --  not the human's shape - AgeOfAlgorithms; it had the default, 80 m like a gun)
 	eh_noisemaker = {r = 0, loud = 0, clip = "ripple"},    -- (throwing it: silent to the clickers - AgeOfAlgorithms; eh_decoy.lua)
+	eh_goo = {r = 0, loud = 0, clip = "ripple"},           -- (the goo grenade's throw too; its burst is a sound of the world - eh_goo.lua)
 	blowtorch = {r = 15, loud = 0.3, clip = "thud", hold = true},
 	extinguisher = {r = 12, loud = 0.3, clip = "thud", hold = true},
 	leafblower = {r = 20, loud = 0.4, clip = "thud", hold = true},
@@ -1921,7 +1922,7 @@ local function monsterMove(dt, p, st, now)
 	end
 	st.swim = false
 	-- the big jump: on take-off hold the upward speed that reaches MONSTER_JUMP (gravity 10)
-	if InputPressed("jump", p) and IsPlayerGrounded(p) and not mantleActive(p) and ehStaminaUse(p, JUMP_STAMINA) then st.jumpT = now; jumpT = now end
+	if InputPressed("jump", p) and IsPlayerGrounded(p) and not mantleActive(p) and not ehGooTrapped(p) and ehStaminaUse(p, JUMP_STAMINA) then st.jumpT = now; jumpT = now end
 	if now - st.jumpT < JUMP_BOOST_TIME then
 		local jv = GetPlayerVelocity(p)
 		jv[2] = math.sqrt(2 * 10 * MONSTER_JUMP)

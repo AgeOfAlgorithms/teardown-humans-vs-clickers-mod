@@ -13,6 +13,7 @@
 #include "eh_combat.lua"
 #include "eh_monster.lua"
 #include "eh_decoy.lua"
+#include "eh_goo.lua"
 
 -- Echo Hunt: the game mode (gamemodes.txt; playable on any map: the map's spawn points or generated ones).
 -- Lobby: teams Humans / Monster (mplib), host settings (round time, head start, time of day). A round: the humans
@@ -121,6 +122,7 @@ function server.init()
 	spawnSetDefaultLoadout(HUMAN_LOADOUT)
 	ehServerInit()
 	ehDecoyServerInit()                                           -- (eh_decoy.lua: the noisemaker tool)
+	ehGooServerInit()                                             -- (eh_goo.lua: the goo grenade)
 	publish(true)
 end
 
@@ -218,6 +220,7 @@ end
 local function humanLoadout(noisemaker)
 	local l = {}
 	for i, t in ipairs(HUMAN_LOADOUT) do l[i] = t end
+	l[#l + 1] = {GOO_TOOL, GOO_AMMO}                              -- (eh_goo.lua: two goo grenades each, AgeOfAlgorithms)
 	if noisemaker then l[#l + 1] = {DECOY_TOOL, 1} end
 	return l
 end
@@ -261,6 +264,7 @@ local function beginRound()
 	G.winner = ""
 	ehCombatReset()
 	ehDecoyReset()
+	ehGooReset()
 	G.phase, G.t = "hide", G.headStart
 	publish(true)
 end
@@ -364,10 +368,12 @@ function server.tick(dt)
 		if G.t <= 0 then G.phase, G.t, G.huntT0 = "hunt", G.roundTime, GetTime(); publish(true) end
 		ehServerTick(dt, G.monsters, false)
 		ehDecoyServerTick(true)
+		ehGooServerTick(true, dt)
 	elseif G.phase == "hunt" then
 		G.t = G.t - dt
 		ehServerTick(dt, G.monsters, true)
 		ehDecoyServerTick(true)
+		ehGooServerTick(true, dt)
 		local left, any, mons = 0, false, 0
 		for _, m in ipairs(G.monsters) do if IsPlayerValid(m) then mons = mons + 1 end end
 		for p in Players() do
@@ -386,13 +392,14 @@ function server.tick(dt)
 	else
 		ehServerTick(dt, {}, false)
 		ehDecoyServerTick(false)                                 -- (no throws; ones still out finish and are cleared)
+		ehGooServerTick(false, dt)                               -- (everyone stuck comes free)
 		for p in Players() do DisablePlayerInput(p) end
 	end
 	publish(false)
 end
 
 function server.update(dt)
-	if teamsIsSetup() then ehServerUpdate(dt) end
+	if teamsIsSetup() then ehServerUpdate(dt); ehGooServerUpdate(dt) end
 end
 
 ----- client -----
@@ -402,6 +409,7 @@ local C = {caughtN = nil, caughtT = -100, caughtName = ""}
 function client.init()
 	ehClientInit()
 	ehDecoyClientInit()
+	ehGooClientInit()
 end
 
 function client.destroy()
@@ -442,6 +450,7 @@ function client.tick(dt)
 	hudTick(dt)
 	teamsSetTags()
 	ehDecoyClientTick(dt)                                         -- (the noisemakers: held, and their shots heard everywhere)
+	ehGooClientTick(dt)                                           -- (the goo: its bursts seen and heard)
 	local e = shared.eh
 	local round = e and (e.phase == "hide" or e.phase == "hunt") or false
 	if GetBool("level.hidenameplates") ~= round then SetBool("level.hidenameplates", round) end   -- (ours: drawNames)
@@ -603,8 +612,8 @@ local function scoreGroups(e, results)
 end
 
 local SCORE_COLUMNS = {{name = "Status", align = "center"}, {name = "Downs", align = "center"}, {name = "Kills", align = "center"},
-	{name = "Revives", align = "center"}, {name = "Damage", align = "center"}, {name = "Wins", align = "center"},
-	{name = "Losses", align = "center"}}
+	{name = "Revives", align = "center"}, {name = "Damage", align = "center"}, {name = "Total wins", align = "center"},
+	{name = "Total losses", align = "center"}}                         -- (the session's, not this round's: AgeOfAlgorithms)
 
 local function drawHunt(e, me)
 	hudDrawTimer(e.t, 1.0)
@@ -631,7 +640,9 @@ local function drawHunt(e, me)
 	end
 	local age = GetTime() - C.caughtT
 	if age < CAUGHT_SHOW then bigText(150, 24, C.caughtName .. " was caught", 1, 0.55, 0.45, math.min(1, (CAUGHT_SHOW - age) / 0.8)) end
-	hudDrawScoreboard(hudIsScoreboardRequested(), "Humans vs Clickers", SCORE_COLUMNS, scoreGroups(e, false))
+	local tally = e.tally or {h = 0, m = 0}                       -- (the session's rounds won by each side here too, not only
+	hudDrawScoreboard(hudIsScoreboardRequested(),                 --  on the results - AgeOfAlgorithms)
+		string.format("Humans vs Clickers   (this session: humans %d, clickers %d)", tally.h or 0, tally.m or 0), SCORE_COLUMNS, scoreGroups(e, false))
 end
 
 local function drawResults(e)
@@ -712,6 +723,7 @@ function client.draw(dt)
 	if not e then return end
 	local me = GetLocalPlayer()
 	ehClientDraw()
+	if e.phase == "hide" or e.phase == "hunt" then ehGooDraw() end
 	if e.phase == "hide" then drawHide(e, me)
 	elseif e.phase == "hunt" then drawHunt(e, me)
 	elseif e.phase == "over" then                               -- (the results: chat as in the lobby)

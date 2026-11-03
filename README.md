@@ -12,8 +12,11 @@ press Start. Players who don't pick a team join the humans; if nobody picks the 
 
 ### Humans
 
-- Start with a gun, a sledgehammer and 5 planks. Hide, barricade, fight back. About half the humans also get a noisemaker
-  (a coin flip each round; always at least one of you, never everyone).
+- Start with a gun, a sledgehammer, 5 planks and 2 goo grenades. Hide, barricade, fight back. About half the humans also
+  get a noisemaker (a coin flip each round; always at least one of you, never everyone).
+- The goo grenade bursts where it hits into a wall of grey foam across the way you threw it: block a doorway with it.
+  Clickers tear through it, bullets and sledges break it, and broken bits vanish after a few seconds. A player or clicker
+  it hits is stuck in a foam cocoon for 5 seconds, unless they break out (4 sledge swings, or 3 strikes for a clicker).
 - The noisemaker is a decoy: throw it, and where it lands it fires gunshots for 7 seconds. To a clicker it looks like you
   shooting from there.
 - Every sound you make can give you away: footsteps (crouch-walk to move silently), gunshots, tools, vehicles, talking.
