@@ -33,6 +33,8 @@ HUMAN_LOADOUT = {{"gun", 12}, {"sledge", 0}, {"plank", 5}}   -- (5 planks: AgeOf
 NOISEMAKER_CHANCE = 0.5      -- each human's chance to start with one (AgeOfAlgorithms: randomness is exciting) - at least
                              -- one human has it and never all of them; a lone human always does
 MONSTER_LOADOUT = {}
+GOLD_WIN, GOLD_LOSS = 120, 80  -- the Inventory mod's gold for each player of the winning / off each of the losing side
+                             -- (the user, 2026-11-15; never below 0)
 MAX_MONSTERS = 11            -- (at most; at least one player always stays human)
 CAUGHT_SHOW = 4              -- s the "<name> was caught" line stays
 
@@ -275,8 +277,17 @@ local function endRound(winner)
 	SetInt(k, GetInt(k) + 1)
 	for p in pairs(G.roster) do                                  -- everyone who played the round: a win or a loss for their side
 		if IsPlayerValid(p) and not G.late[p] then
-			local kp = wlKey(p) .. (((winner == "humans") ~= isMonster(p)) and ".w" or ".l")
+			local won = (winner == "humans") ~= isMonster(p)
+			local kp = wlKey(p) .. (won and ".w" or ".l")
 			SetInt(kp, GetInt(kp) + 1)
+			-- the Inventory mod's gold (if the host runs it): GOLD_WIN for each winner, GOLD_LOSS off each loser - it makes
+			-- the wallet, never goes below 0 and saves it (inventory.goldadd.<p>: changes appended, read and cleared there)
+			if GetBool("inventory.present") then                 -- (no Inventory, or one without the key: nothing piles up)
+				local gk = "inventory.goldadd." .. p
+				local add = won and string.format("%d:Round_won", GOLD_WIN) or string.format("%d:Round_lost", -GOLD_LOSS)   -- ("_": a space)
+				local was = GetString(gk)
+				SetString(gk, was == "" and add or (was .. " " .. add))
+			end
 		end
 	end
 	publish(true)
@@ -339,12 +350,31 @@ local function lobbyAutoJoin()
 	end
 end
 
+-- the Inventory mod (eh_monster.lua inventoryBlocks): only humans in a round have one - clickers never, spectators
+-- (joined mid-round) and everyone in the lobby or on the results neither (nothing to use it for; its hotbar drew under
+-- the lobby's lines); the mode's own tools are never its items
+local INV_KEEP = nil
+local function inventoryTick()
+	if not INV_KEEP then
+		local ids = {}
+		for _, t in ipairs(HUMAN_LOADOUT) do ids[#ids + 1] = t[1] end
+		ids[#ids + 1] = GOO_TOOL
+		ids[#ids + 1] = DECOY_TOOL
+		INV_KEEP = table.concat(ids, " ")
+	end
+	local playing = teamsIsSetup() and (G.phase == "hide" or G.phase == "hunt")
+	local set = {}
+	for p in Players() do set[p] = not playing or isMonster(p) or G.late[p] == true end
+	inventoryBlocks(set, INV_KEEP)
+end
+
 function server.tick(dt)
 	SetFloat("echohunt.probe.globals", GetTime())               -- (on the Echo Hunt test level its TEST copy steps aside)
 	lobbyAutoJoin()
 	lobbyClickerCap()
 	if teamsTick(dt) then beginRound() end
 	chatKeys()
+	inventoryTick()
 	if not teamsIsSetup() then
 		for p in Players() do DisablePlayer(p) end
 		ehServerTick(dt, {}, false)
@@ -655,6 +685,18 @@ local function drawResults(e)
 	if win then groups[1], groups[2] = groups[2], groups[1] end
 	hudDrawResults(banner, color, string.format("Humans vs Clickers   (this session: humans %d, clickers %d)", tally.h or 0, tally.m or 0),
 		SCORE_COLUMNS, groups)
+	-- the Inventory mod's gold for this round (when the host runs it; not for a late joiner, who didn't play)
+	local me = GetLocalPlayer()
+	if GetBool("inventory.present") and not (type(e.late) == "table" and e.late[me]) then
+		local won = (e.winner == "humans") ~= isMonsterOf(e, me)
+		UiPush()
+		UiTranslate(UiCenter(), UiHeight() - 110)
+		UiAlign("center middle")
+		UiFont("bold.ttf", 32)
+		if won then UiColor(1, 0.82, 0.3, 1) else UiColor(0.85, 0.55, 0.45, 1) end
+		UiText(won and string.format("+%d gold", GOLD_WIN) or string.format("-%d gold", GOLD_LOSS))
+		UiPop()
+	end
 end
 
 -- Proximity Comms runs here (its heartbeat this second), and this player is typing in it

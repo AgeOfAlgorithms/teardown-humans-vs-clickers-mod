@@ -1981,6 +1981,24 @@ local function monsterMove(dt, p, st, now)
 	end
 end
 
+-- the McPuppet Inventory System (a separate global mod, when the host runs it): set[p] = no inventory for p - it never
+-- picks up, holds, wears or buys anything, and nothing of it is drawn; its items and gold wait for when it is free again
+-- (echohunt.lua: clickers, spectators, and everyone outside a round). inventory.block.<p> (host, synced), written on
+-- change; keep = the tools this mode hands out and spends itself (inventory.keeptools: never the inventory's items,
+-- never enabled / disabled / put away by it). An Inventory without these keys ignores them
+local invBlocked = {}
+function inventoryBlocks(set, keep)
+	if GetString("inventory.keeptools") ~= keep then SetString("inventory.keeptools", keep, true) end
+	for p in Players() do
+		local b = set[p] == true
+		if invBlocked[p] ~= b then invBlocked[p] = b; SetBool("inventory.block." .. p, b, true) end
+	end
+	for p in PlayersRemoved() do
+		if invBlocked[p] then SetBool("inventory.block." .. p, false, true) end
+		invBlocked[p] = nil
+	end
+end
+
 function ehServerTick(dt, ms, hunting)
 	if type(ms) == "number" then ms = (ms ~= 0) and {ms} or {} end
 	local live, set = {}, {}
