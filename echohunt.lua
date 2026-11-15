@@ -14,6 +14,8 @@
 #include "eh_monster.lua"
 #include "eh_decoy.lua"
 #include "eh_goo.lua"
+#include "eh_upgrade.lua"
+#include "eh_laser.lua"
 
 -- Echo Hunt: the game mode (gamemodes.txt; playable on any map: the map's spawn points or generated ones).
 -- Lobby: teams Humans / Monster (mplib), host settings (round time, head start, time of day). A round: the humans
@@ -275,6 +277,11 @@ local function endRound(winner)
 	G.phase, G.winner, G.t = "over", winner, 0
 	local k = winner == "humans" and "echohunt.tally.h" or "echohunt.tally.m"   -- (the session's: survives Play Again)
 	SetInt(k, GetInt(k) + 1)
+	if winner == "monster" then                                  -- the humans still down when the clickers win: finished by
+		for p in pairs(G.roster) do                              --  whoever downed them (the Inventory's gold for a kill)
+			if IsPlayerValid(p) and not isMonster(p) and ehIsDown(p) then ehKillGold(ehDownedBy(p)) end
+		end
+	end
 	for p in pairs(G.roster) do                                  -- everyone who played the round: a win or a loss for their side
 		if IsPlayerValid(p) and not G.late[p] then
 			local won = (winner == "humans") ~= isMonster(p)
@@ -366,6 +373,49 @@ local function inventoryTick()
 	local set = {}
 	for p in Players() do set[p] = not playing or isMonster(p) or G.late[p] == true end
 	inventoryBlocks(set, INV_KEEP)
+	-- a human caught (dead) loses nothing (the user, 2026-11-15): no gold (the Inventory's death share off) and none of
+	-- what they carry or wear (inventory.keepondeath: nothing dropped where they fall)
+	if not HasKey("inventory.deathloss") or GetFloat("inventory.deathloss") ~= 0 then SetFloat("inventory.deathloss", 0) end
+	if not GetBool("inventory.keepondeath") then SetBool("inventory.keepondeath", true) end
+end
+
+-- Villagers of Dunmarrow (a separate global mod with AI villagers, when the host runs it; the user, 2026-11-15): the
+-- clickers are a kind its villagers fear and hear before they see (villagers.kind.clicker.*), and each clicker in a
+-- round is a thing at its body's middle (villagers.thing.clicker<p>.*), gone outside a round. Plain host registry keys:
+-- nothing happens without that mod (its API.md)
+local VIL = {kindT = -100, nextT = 0, on = {}}
+local function villagersTick()
+	local now = GetTime()
+	if now - VIL.kindT > 5 then                                  -- (described again every 5 s: its init may run after ours)
+		VIL.kindT = now
+		SetString("villagers.kind.clicker.name", "a clicker")
+		SetString("villagers.kind.clicker.feel", "fear")
+		SetString("villagers.kind.clicker.note", "a blind, eyeless monster twice a man's height that hunts by sound: stay silent and still")
+		SetFloat("villagers.kind.clicker.danger", 0.9)
+		SetString("villagers.kind.clicker.sound", "a rapid clicking")
+		SetFloat("villagers.kind.clicker.hear", 30)
+	end
+	if now < VIL.nextT then return end
+	VIL.nextT = now + 0.25
+	local playing = teamsIsSetup() and (G.phase == "hide" or G.phase == "hunt")
+	local seen = {}
+	if playing then
+		for _, m in ipairs(G.monsters) do
+			if IsPlayerValid(m) then
+				local k = "villagers.thing.clicker" .. m
+				local at = VecAdd(GetPlayerTransform(m).pos, Vec(0, 1.8, 0))
+				SetString(k .. ".kind", "clicker")
+				SetFloat(k .. ".x", at[1]); SetFloat(k .. ".y", at[2]); SetFloat(k .. ".z", at[3])
+				SetString(k .. ".doing", G.phase == "hide" and "crouched, waking up" or "hunting by sound")
+				SetBool(k .. ".gone", false)
+				seen[m] = true
+				VIL.on[m] = true
+			end
+		end
+	end
+	for m in pairs(VIL.on) do
+		if not seen[m] then SetBool("villagers.thing.clicker" .. m .. ".gone", true); VIL.on[m] = nil end
+	end
 end
 
 function server.tick(dt)
@@ -375,6 +425,8 @@ function server.tick(dt)
 	if teamsTick(dt) then beginRound() end
 	chatKeys()
 	inventoryTick()
+	ehUpServerTick()                                              -- (eh_upgrade.lua: the clickers' upgrades)
+	villagersTick()                                               -- (the Villagers mod's villagers fear the clickers)
 	if not teamsIsSetup() then
 		for p in Players() do DisablePlayer(p) end
 		ehServerTick(dt, {}, false)
@@ -481,8 +533,14 @@ function client.tick(dt)
 	teamsSetTags()
 	ehDecoyClientTick(dt)                                         -- (the noisemakers: held, and their shots heard everywhere)
 	ehGooClientTick(dt)                                           -- (the goo: its bursts seen and heard)
+	ehUpClientTick()                                              -- (eh_upgrade.lua: a clicker's upgrade screen)
+	ehLaserClientTick(dt)                                         -- (eh_laser.lua: the laser seen and heard)
 	local e = shared.eh
 	local round = e and (e.phase == "hide" or e.phase == "hunt") or false
+	if e and e.phase == "hide" and C.phaseWas ~= "hide" then        -- (a round begins: this player's gold, for the results)
+		C.gold0 = HasKey("inventory.gold." .. GetLocalPlayer()) and GetInt("inventory.gold." .. GetLocalPlayer()) or nil
+	end
+	C.phaseWas = e and e.phase or nil
 	if GetBool("level.hidenameplates") ~= round then SetBool("level.hidenameplates", round) end   -- (ours: drawNames)
 	if e and (e.phase == "hunt" or (e.phase == "hide" and e.late and e.late[GetLocalPlayer()])) then spectateTick(spectateList(e)) end
 	if e and e.phase == "hide" and type(e.mspawns) == "table" and not isMonsterOf(e, GetLocalPlayer()) then
@@ -689,12 +747,14 @@ local function drawResults(e)
 	local me = GetLocalPlayer()
 	if GetBool("inventory.present") and not (type(e.late) == "table" and e.late[me]) then
 		local won = (e.winner == "humans") ~= isMonsterOf(e, me)
+		local d = won and GOLD_WIN or -GOLD_LOSS                -- (what this round really changed: the round's reward, a
+		if C.gold0 then d = GetInt("inventory.gold." .. me) - C.gold0 end   --  clicker's catches, a loss stopped at 0)
 		UiPush()
 		UiTranslate(UiCenter(), UiHeight() - 110)
 		UiAlign("center middle")
 		UiFont("bold.ttf", 32)
-		if won then UiColor(1, 0.82, 0.3, 1) else UiColor(0.85, 0.55, 0.45, 1) end
-		UiText(won and string.format("+%d gold", GOLD_WIN) or string.format("-%d gold", GOLD_LOSS))
+		if d >= 0 then UiColor(1, 0.82, 0.3, 1) else UiColor(0.85, 0.55, 0.45, 1) end
+		UiText(string.format("%s%d gold", d >= 0 and "+" or "", d))
 		UiPop()
 	end
 end
@@ -771,6 +831,7 @@ function client.draw(dt)
 		UiPop()
 		chatHint()
 		climbHint()
+		ehUpDraw()                                                   -- (a clicker's upgrade screen: on the Clickers team)
 		if opening then SetBool("proxchat.open", true) end
 		return
 	end
@@ -779,6 +840,7 @@ function client.draw(dt)
 	local me = GetLocalPlayer()
 	ehClientDraw()
 	if e.phase == "hide" or e.phase == "hunt" then ehGooDraw() end
+	if e.phase == "hunt" then ehLaserDraw() end                   -- (eh_laser.lua: a clicker's laser, ready or cooling down)
 	if e.phase == "hide" then drawHide(e, me)
 	elseif e.phase == "hunt" then drawHunt(e, me)
 	elseif e.phase == "over" then                               -- (the results: chat as in the lobby)
@@ -795,6 +857,7 @@ function client.draw(dt)
 			if opening then SetBool("proxchat.open", true) end
 		end
 	end
+	if e.phase ~= "over" then ehUpDraw() end                      -- (a clicker's upgrade screen, on top)
 	hudDrawFade(dt)
 end
 

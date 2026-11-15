@@ -25,6 +25,18 @@ ATTACK_CD = 0.9            -- s between swings
 GRAB_RANGE = 6.1           -- m from the monster's head to a human's chest: its reach (3.6 + 70 %, AgeOfAlgorithms)
 GRAB_CONE = 0.72           -- cos of the cone around its aim (~44 degrees)
 HIT_DAMAGE = 0.5           -- of a human's health per hit: half (AgeOfAlgorithms; no grab any more)
+-- the laser beam (its upgrade, the user 2026-11-15): LMB held past LASER_HOLD starts the charge (a tap stays the swipe);
+-- after LASER_CHARGE s held, letting go fires a thick beam from its maw where it then looks; it takes all its stamina.
+-- Only a human the beam touches is hurt (LASER_BODY: the beam's radius + a body's), LASER_DAMAGE of their health, with
+-- their cry (heard by the clickers); a modest hole where it strikes
+LASER_HOLD = 0.35
+LASER_CHARGE = 2.0
+LASER_RANGE = 90
+LASER_DAMAGE = 0.8
+LASER_BODY = 0.5
+LASER_HOLE = {1.2, 0.9, 0.6}    -- m: soft / medium / hard materials (the user: "not too big")
+LASER_CD = 45                   -- s after a shot before the next charge (the user)
+GOLD_KILL = 10                  -- the Inventory mod's gold a clicker gets for each human it catches (the user, 2026-11-15)
 DOWN_HEALTH = 0.05         -- a downed human's engine health (kept above 0: the engine's death is "out")
 DOWN_TIME = 25             -- s for the downed bar to empty (AgeOfAlgorithms)
 DOWN_HIT = 0.08            -- of the bar a hit on a downed human takes ("decreases the bar slowly")
@@ -439,15 +451,16 @@ local function hitTarget(m, head, aim)
 	return best
 end
 
-local function hurtHuman(q, m)
+local function hurtHuman(q, m, dmg)
+	dmg = dmg or HIT_DAMAGE
 	local d = CBG.down[q]
 	if d then
 		d.bar = d.bar - DOWN_HIT                                    -- (down: the bar goes a little faster)
 		d.by = m
 	else
 		local h0 = GetPlayerHealth(q)
-		local h = h0 - HIT_DAMAGE
-		stat(m, "dmg", 100 * math.min(HIT_DAMAGE, h0))
+		local h = h0 - dmg
+		stat(m, "dmg", 100 * math.min(dmg, h0))
 		if h <= 0.02 then                                        -- downed: crawling, the bar draining
 			CBG.down[q] = {bar = 1, by = m, rev = 0, helper = nil, tool = GetPlayerTool(q), noiseT = 0}
 			SetPlayerHealth(DOWN_HEALTH, q)
@@ -528,6 +541,75 @@ local function attack(m)
 	end
 end
 
+-- the shortest distance between segments a0-a1 and b0-b1
+local function segDist(a0, a1, b0, b1)
+	local u, v, w = VecSub(a1, a0), VecSub(b1, b0), VecSub(a0, b0)
+	local a, b, c, d, e = VecDot(u, u), VecDot(u, v), VecDot(v, v), VecDot(u, w), VecDot(v, w)
+	local den = a * c - b * b
+	local s = den > 1e-9 and math.max(0, math.min(1, (b * e - c * d) / den)) or 0
+	local t = c > 1e-9 and (b * s + e) / c or 0
+	if t < 0 then t = 0; s = a > 1e-9 and math.max(0, math.min(1, -d / a)) or 0
+	elseif t > 1 then t = 1; s = a > 1e-9 and math.max(0, math.min(1, (b - d) / a)) or 0 end
+	return VecLength(VecSub(VecAdd(a0, VecScale(u, s)), VecAdd(b0, VecScale(v, t))))
+end
+
+-- (every machine) the laser: shared.ehLaser[m] = charge number while it charges; shared.ehBeam = the last shot
+CBG.lzPub, CBG.lzN, CBG.beamN = {}, 0, 0
+local function laserCharging(m, on)
+	if on then CBG.lzN = CBG.lzN + 1; CBG.lzPub[m] = CBG.lzN else CBG.lzPub[m] = nil end
+	local c = {}
+	for k, v in pairs(CBG.lzPub) do c[k] = v end
+	shared.ehLaser = c
+end
+
+-- fired: from its maw where it looks now, to the first thing in the way; humans the beam touches are hurt
+local function fireLaser(m)
+	local head, aim = monsterHead(m)
+	local from = VecAdd(head, VecScale(aim, 0.45))
+	rejectOwn(m)
+	local hit, d = QueryRaycast(from, aim, LASER_RANGE, 0.2)
+	local to = VecAdd(from, VecScale(aim, hit and d or LASER_RANGE))
+	for q in Players() do
+		if not CB[q] and GetPlayerHealth(q) > 0 and not (EH_OUT and EH_OUT[q]) then
+			local feet = GetPlayerTransform(q).pos
+			local low = CBG.down[q] or (ehInWater and ehInWater(q))
+			if segDist(from, to, VecAdd(feet, Vec(0, 0.2, 0)), VecAdd(feet, Vec(0, low and 0.6 or 1.7, 0))) <= LASER_BODY then
+				hurtHuman(q, m, LASER_DAMAGE)                     -- (their cry: the clickers hear where they are)
+			end
+		end
+	end
+	if hit then MakeHole(to, LASER_HOLE[1], LASER_HOLE[2], LASER_HOLE[3]) end
+	if ehStaminaDrain then ehStaminaDrain(m) end
+	CBG.beamN = CBG.beamN + 1
+	shared.ehBeam = {n = CBG.beamN, m = m, x0 = from[1], y0 = from[2], z0 = from[3], x1 = to[1], y1 = to[2], z1 = to[3],
+		hit = hit and true or false}
+end
+
+-- (server, every frame of the hunt) its laser, if bought: LMB held -> charging -> let go when charged: fire; let go
+-- early, stunned, carrying or out of stamina at the start: nothing (no stamina taken)
+local function laserTick(m, st, now, can)
+	if not can or ehUpLevel(m, "laser") <= 0 or st.carry then
+		if st.lzCharge then st.lzCharge = nil; laserCharging(m, false) end
+		st.lzPress = nil
+		return
+	end
+	if InputPressed("lmb", m) then st.lzPress = now end
+	if st.lzPress and InputDown("lmb", m) then
+		if not st.lzCharge and now - st.lzPress >= LASER_HOLD and now >= (st.lzNext or 0)
+			and (not ehStaminaReady or ehStaminaReady(m)) then
+			st.lzCharge = now
+			laserCharging(m, true)
+		end
+	else
+		if st.lzCharge then
+			if now - st.lzCharge >= LASER_CHARGE then fireLaser(m); st.lzNext = now + LASER_CD end
+			st.lzCharge = nil
+			laserCharging(m, false)
+		end
+		st.lzPress = nil
+	end
+end
+
 -- the downed (server, every frame of the hunt): crawling at a third of the walking speed, no tool, the bar draining
 -- over DOWN_TIME s; a human holding E (interact) next to them for REVIVE_TIME s helps them up (bandage sounds, a soft
 -- noise the monsters hear); the bar empty: out (caught, a catch for the monster that downed them)
@@ -588,6 +670,7 @@ local function downedTick(dt, hunting)
 				local m = d.by or 0
 				CBG.catches[m] = (CBG.catches[m] or 0) + 1
 				stat(m, "kills")
+				if CB[m] then ehKillGold(m) end                       -- (the Inventory mod's gold: GOLD_KILL for it)
 				CBG.caughtN = CBG.caughtN + 1
 				shared.ehCaught = {n = CBG.caughtN, p = q, by = m}
 			else
@@ -606,6 +689,21 @@ end
 function ehIsDown(p)
 	local t = shared.ehDown
 	return type(t) == "table" and t[p] ~= nil
+end
+
+-- (server) the clicker that downed p (0: none, or p isn't down)
+function ehDownedBy(p)
+	local d = CBG.down[p]
+	return d and d.by or 0
+end
+
+-- (server) the Inventory mod's gold for a human a clicker finished (caught, or down when the clickers won): GOLD_KILL
+function ehKillGold(m)
+	if not m or m == 0 or not IsPlayerValid(m) or not GetBool("inventory.present") then return end
+	local gk = "inventory.goldadd." .. m
+	local add = string.format("%d:Human_caught", GOLD_KILL)
+	local was = GetString(gk)
+	SetString(gk, was == "" and add or (was .. " " .. add))
 end
 
 ----- every frame (server) -----
@@ -634,13 +732,15 @@ local function monsterTick(dt, m, hunting, now)
 	elseif st.hp < HP_MAX and now - st.lastDmg >= HP_REGEN_DELAY then
 		st.hp = math.min(HP_MAX, st.hp + HP_REGEN * dt)
 	end
-	if hunting and not stunned then
+	local shopping = GetBool("echohunt.shop." .. m)                -- (its upgrade screen is open: clicks are buttons)
+	if hunting and not stunned and not shopping then
 		if InputPressed("lmb", m) and not st.carry and st.threwT ~= now and now >= st.nextAttack   -- (carrying: LMB threw it)
 			and (not ehStaminaUse or ehStaminaUse(m, ATTACK_STAMINA)) then
 			st.nextAttack = now + ATTACK_CD
 			attack(m)
 		end
 	end
+	laserTick(m, st, now, hunting and not stunned and not shopping)
 end
 
 function ehCombatTick(dt, ms, hunting)

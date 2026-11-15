@@ -164,3 +164,45 @@ RIG = {
 		},
 	},
 }
+
+-- Upgrade looks (tools/monster/upgrades.py), same frame and conventions as RIG (root frame, rest pose, m):
+-- tiers[part][k]: the stamina tier k (1..5) file replacing that part; its voxel box has the SAME centre as the
+--   base part (RIG center), so swap the file only. Same tier for all five parts at once.
+-- wing_l / wing_r: folded bat wings, children of the torso modelled in their folded rest pose; spread = turn
+--   by an angle (0..maxAngle degrees) about axis through pivot (the hinge knob; 90 = straight out sideways).
+-- mouthglow: emissive plug in the head's throat (child of the head, no own rotation; pivot = center);
+--   pulse it with SetShapeEmissiveScale. size: padded voxel size {x, y, z}.
+RIG_EXTRA = {
+	tiers = {
+		torso = {"MOD/vox/monster/demon_torso_t1.vox", "MOD/vox/monster/demon_torso_t2.vox", "MOD/vox/monster/demon_torso_t3.vox", "MOD/vox/monster/demon_torso_t4.vox", "MOD/vox/monster/demon_torso_t5.vox"},
+		arm_l_up = {"MOD/vox/monster/demon_arm_l_up_t1.vox", "MOD/vox/monster/demon_arm_l_up_t2.vox", "MOD/vox/monster/demon_arm_l_up_t3.vox", "MOD/vox/monster/demon_arm_l_up_t4.vox", "MOD/vox/monster/demon_arm_l_up_t5.vox"},
+		arm_l_low = {"MOD/vox/monster/demon_arm_l_low_t1.vox", "MOD/vox/monster/demon_arm_l_low_t2.vox", "MOD/vox/monster/demon_arm_l_low_t3.vox", "MOD/vox/monster/demon_arm_l_low_t4.vox", "MOD/vox/monster/demon_arm_l_low_t5.vox"},
+		arm_r_up = {"MOD/vox/monster/demon_arm_r_up_t1.vox", "MOD/vox/monster/demon_arm_r_up_t2.vox", "MOD/vox/monster/demon_arm_r_up_t3.vox", "MOD/vox/monster/demon_arm_r_up_t4.vox", "MOD/vox/monster/demon_arm_r_up_t5.vox"},
+		arm_r_low = {"MOD/vox/monster/demon_arm_r_low_t1.vox", "MOD/vox/monster/demon_arm_r_low_t2.vox", "MOD/vox/monster/demon_arm_r_low_t3.vox", "MOD/vox/monster/demon_arm_r_low_t4.vox", "MOD/vox/monster/demon_arm_r_low_t5.vox"},
+	},
+	wing_l = {
+		parent = "torso",
+		pivot = {0.175, 2.875, -0.475},
+		center = {0.35, 2.4, -0.35},
+		axis = {0, 0.09, 0.996},
+		maxAngle = 120,
+		file = "MOD/vox/monster/demon_wing_l.vox",
+		size = {12, 36, 8},
+	},
+	wing_r = {
+		parent = "torso",
+		pivot = {-0.175, 2.875, -0.475},
+		center = {-0.3, 2.4, -0.35},
+		axis = {0, -0.09, -0.996},
+		maxAngle = 120,
+		file = "MOD/vox/monster/demon_wing_r.vox",
+		size = {12, 36, 8},
+	},
+	mouthglow = {
+		parent = "head",
+		pivot = {0, 3.55, 0},
+		center = {0, 3.55, 0},
+		file = "MOD/vox/monster/demon_mouthglow.vox",
+		size = {8, 12, 4},
+	},
+}

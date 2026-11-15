@@ -75,7 +75,7 @@ local function mvSpawn(MV)
 				rest = Transform(Vec(pt.center[1], pt.center[2], pt.center[3]), Quat())}
 		end
 	end
-	MV.invisible = nil
+	MV.invisible, MV.tier = nil, 0                              -- (the base parts: no stamina tier yet)
 	mvRebuildShapes()
 end
 
@@ -100,6 +100,103 @@ local function mvSetInvisible(MV, inv)
 			if IsHandleValid(s) then if inv then SetTag(s, "invisible") else RemoveTag(s, "invisible") end end
 		end
 	end
+end
+
+-- ---------------------------------------------------------------- its upgrades on its body (eh_upgrade.lua)
+-- stamina level k: the torso and arms swapped for RIG_EXTRA.tiers[...][k] (thicker and thicker); the double jump:
+-- bat wings on its back (attached to the torso, folded; spread and flapped on each double jump - shared.ehFlap);
+-- the laser: a glowing insert in its maw (attached to the head), pulsing, brighter while it charges or fires
+local function rigCenter(name)
+	for _, pt in ipairs(RIG.parts) do if pt.name == name then return Vec(pt.center[1], pt.center[2], pt.center[3]) end end
+	return Vec(0, 0, 0)
+end
+
+local function mvReplacePart(MV, q, file)
+	if IsHandleValid(q.body) then Delete(q.body) end
+	local body, shapes = mvSpawnPart(file)
+	q.body, q.shapes, q.centred = body or 0, shapes or {}, false
+	MV.invisible = nil                                          -- (its own view: hidden again next frame)
+end
+
+-- an attached part (wing, glow): spawned when owned, deleted when not
+local function mvAttach(MV, name, def, on)
+	local idx = nil
+	for i, q in ipairs(MV.parts) do if q.name == name then idx = i end end
+	if on and not idx and def then
+		local body, shapes = mvSpawnPart(def.file)
+		if body then
+			local pc = rigCenter(def.parent)
+			MV.parts[#MV.parts + 1] = {name = name, body = body, shapes = shapes, attach = def.parent,
+				pivot = VecSub(Vec(def.pivot[1], def.pivot[2], def.pivot[3]), pc),
+				off = VecSub(Vec(def.center[1], def.center[2], def.center[3]), Vec(def.pivot[1], def.pivot[2], def.pivot[3])),
+				axis = def.axis and Vec(def.axis[1], def.axis[2], def.axis[3]) or nil, angle = 0,
+				rest = Transform(Vec(def.center[1], def.center[2], def.center[3]), Quat())}
+			MV.invisible = nil
+		end
+		return true
+	elseif not on and idx then
+		if IsHandleValid(MV.parts[idx].body) then Delete(MV.parts[idx].body) end
+		table.remove(MV.parts, idx)
+		return true
+	end
+	return false
+end
+
+-- (every frame) what it owns -> its body; the wings' flap angle, the glow's brightness
+local function mvUpgrades(MV, m, now)
+	if not RIG_EXTRA or not ehUpLevel then return end
+	local changed = false
+	local tier = math.max(0, math.min(5, ehUpLevel(m, "stamina")))
+	if MV.tier ~= tier then
+		for _, q in ipairs(MV.parts) do
+			local files = RIG_EXTRA.tiers and RIG_EXTRA.tiers[q.name]
+			if files then
+				local file = tier > 0 and files[tier] or nil
+				if not file then for _, pt in ipairs(RIG.parts) do if pt.name == q.name then file = pt.file end end end
+				if file then mvReplacePart(MV, q, file) end
+			end
+		end
+		MV.tier, changed = tier, true
+	end
+	local wings = ehUpLevel(m, "djump") > 0
+	if mvAttach(MV, "wing_l", RIG_EXTRA.wing_l, wings) then changed = true end
+	if mvAttach(MV, "wing_r", RIG_EXTRA.wing_r, wings) then changed = true end
+	local laser = ehUpLevel(m, "laser") > 0
+	if mvAttach(MV, "mouthglow", RIG_EXTRA.mouthglow, laser) then changed = true end
+	if changed then mvRebuildShapes() end
+	-- the flap: spread out fast, two beats, folded back
+	local fl = type(shared.ehFlap) == "table" and shared.ehFlap[m] or 0
+	if MV.flapN == nil then MV.flapN = fl end                   -- (flaps before this model was made: not replayed; the
+	if fl ~= MV.flapN then MV.flapN, MV.flapT = fl, now end     --  very first double jump of a game, from 0, is a flap)
+	local t = now - (MV.flapT or -100)
+	local ang = 0
+	if t < 0.15 then ang = 110 * (t / 0.15)
+	elseif t < 0.75 then ang = 85 + 25 * math.cos((t - 0.15) / 0.6 * 4 * math.pi)
+	elseif t < 1.35 then local k = (t - 0.75) / 0.6; ang = 110 * (1 - k * k * (3 - 2 * k)) end
+	-- the glow: a slow pulse; building while it charges; blazing as it fires
+	local glow = 0.5 + 0.35 * math.sin(now * 3 + m)
+	local ch = type(shared.ehLaser) == "table" and shared.ehLaser[m] or nil
+	if ch then
+		if MV.chargeN ~= ch then MV.chargeN, MV.chargeT = ch, now end
+		local k = math.min(1, (now - MV.chargeT) / (LASER_CHARGE or 2))
+		glow = (1 + 3 * k) * (0.8 + 0.2 * math.sin(now * (10 + 20 * k)))
+	end
+	local b = shared.ehBeam
+	if b and b.m == m and b.n ~= MV.beamN then MV.beamN, MV.beamT = b.n, now end
+	if now - (MV.beamT or -100) < 0.6 then glow = 4 end
+	for _, q in ipairs(MV.parts) do
+		if q.axis then q.angle = ang end
+		if q.name == "mouthglow" then for _, s in ipairs(q.shapes) do if IsHandleValid(s) then SetShapeEmissiveScale(s, glow) end end end
+	end
+end
+
+-- an attached part's transform in the root frame, from its parent's pose
+local function mvAttachedTransform(MV, q)
+	local par = MV.out[q.attach]
+	if not par then return q.rest end
+	local r = q.axis and QuatAxisAngle(q.axis, q.angle or 0) or Quat()
+	local loc = Transform(VecAdd(q.pivot, QuatRotateVec(r, q.off)), r)
+	return TransformToParentTransform(par, loc)
 end
 
 -- how much room above the feet (the pose crawls under a low ceiling), eased so a doorway doesn't pop
@@ -195,10 +292,12 @@ local function mvRenderOne(MV, m, screamN, dt)
 	local face = (st == "climb" or st == "pullup") and ehClimbFacing and ehClimbFacing(cs) or tr.rot   -- (into the wall)
 	local root = Transform(feet, QuatRotateQuat(face, QuatEuler(0, 180, 0)))   -- (the rig's +z forward = the player's -z)
 	local zero = Vec(0, 0, 0)
+	mvUpgrades(MV, m, now)
 	for _, q in ipairs(MV.parts) do mvCentre(q) end
 	for _, q in ipairs(MV.parts) do
 		if IsHandleValid(q.body) then
-			SetBodyTransform(q.body, TransformToParentTransform(root, MV.out[q.name] or q.rest))
+			local lt = q.attach and mvAttachedTransform(MV, q) or MV.out[q.name] or q.rest
+			SetBodyTransform(q.body, TransformToParentTransform(root, lt))
 			SetBodyVelocity(q.body, zero)
 			SetBodyAngularVelocity(q.body, zero)
 		end

@@ -64,6 +64,20 @@ STAMINA_REGEN = 0.75  -- s of stamina back per s walking (x1.6 standing still)
 EXHAUSTED_UNTIL = 0.35   -- an empty bar must refill this far before running again
 ATTACK_STAMINA = 0.8  -- s of the bar an attack (a swipe or a grab) takes (AgeOfAlgorithms: not just running)
 JUMP_STAMINA = 0.8    -- s of the bar its big jump takes (AgeOfAlgorithms); without enough (or exhausted) only a human's hop
+-- its upgrades, bought with the Inventory mod's gold (eh_upgrade.lua; the user, 2026-11-15)
+STAMINA_UP = 0.1      -- the bar's length per stamina level (+10 %, up to +50 %)
+ECHO_UP_MISS, ECHO_UP_HIT = 1, 2   -- s off its echolocation cooldown per level: after a miss, after a hit (the user;
+                                  -- up to 5 levels: -5 s / -10 s)
+DJUMP_HEIGHT = 1.8    -- m the double jump rises: clearly lower than its first jump (the user; a second jump in mid-air, once
+                      -- until it lands; its wings flap)
+
+-- an upgrade's level for player p (any machine): shared.ehUp[p][id], 0 without
+function ehUpLevel(p, id)
+	local t = type(shared.ehUp) == "table" and shared.ehUp[p] or nil
+	return t and t[id] or 0
+end
+-- its stamina bar's length (s of running)
+function ehStaminaMax(p) return STAMINA * (1 + STAMINA_UP * ehUpLevel(p, "stamina")) end
 MSTEP_WALK = 1.8      -- m between the monster's footfalls walking (its stride: 3.6 m per cycle), everyone hears them
 MSTEP_RUN = 1.7       -- m running (feet and claws)
 MSTEP_CROUCH_VOL = 0.12   -- crouch-walking, its footfalls are barely there (AgeOfAlgorithms)
@@ -748,11 +762,12 @@ local function startPulse(now, eye)
 		local d = VecLength(VecSub(list[i].pos, eye))
 		if d <= PULSE_RANGE then pending[#pending + 1] = {dist = d, target = list[i]} end
 	end
+	local lvl = ehUpLevel(GetLocalPlayer(), "echo")                -- (its upgrade: eh_upgrade.lua)
 	if #pending > 0 then
-		pulseReady = now + PULSE_CD_HIT
+		pulseReady = now + math.max(1, PULSE_CD_HIT - ECHO_UP_HIT * lvl)
 		pulseLast = "revealed " .. #pending
 	else
-		pulseReady = now + PULSE_CD_MISS
+		pulseReady = now + math.max(1, PULSE_CD_MISS - ECHO_UP_MISS * lvl)
 		pulseLast = "no one"
 	end
 	PlaySound(snd.clickPulse, eye, CLICK_PULSE_VOL, false, 0.95 + math.random() * 0.1)
@@ -1909,6 +1924,7 @@ end
 local mon = {}             -- [monster] = {stamina, exhausted, jumpT, nextCall}
 local monKey, stamKey = nil, nil
 local callPub = {}
+local flapPub = {}         -- [monster] = its double jumps so far (shared.ehFlap: the wings' flap on every machine)
 
 -- (server) take cost seconds of monster m's stamina for an attack or a jump: false (nothing taken) when it hasn't
 -- that much or is exhausted
@@ -1920,6 +1936,9 @@ function ehStaminaUse(m, cost)
 	if st.stamina <= 0.01 then st.stamina, st.exhausted = 0, true end
 	return true
 end
+-- (server) can monster m start something that takes all its stamina (not exhausted, some left); take it all
+function ehStaminaReady(m) local st = mon[m]; return not st or (not st.exhausted and st.stamina > 0.1) end
+function ehStaminaDrain(m) local st = mon[m]; if st then st.stamina, st.exhausted = 0, true end end
 
 local function copyTable(t)
 	local c = {}
@@ -1935,8 +1954,9 @@ local function monsterMove(dt, p, st, now)
 		st.stamina = st.stamina - dt
 		if st.stamina <= 0 then st.stamina, st.exhausted = 0, true end
 	else
-		st.stamina = math.min(STAMINA, st.stamina + dt * STAMINA_REGEN * (moving and 1 or 1.6))
-		if st.exhausted and st.stamina >= STAMINA * EXHAUSTED_UNTIL then st.exhausted = false end
+		local full = ehStaminaMax(p)
+		st.stamina = math.min(full, st.stamina + dt * STAMINA_REGEN * (moving and 1 or 1.6))
+		if st.exhausted and st.stamina >= full * EXHAUSTED_UNTIL then st.exhausted = false end
 	end
 	st.run = run and true or false
 	if not ehClimbOn(p) then                                     -- (Climbing holds a climber's walkingSpeed at 0)
@@ -1960,10 +1980,23 @@ local function monsterMove(dt, p, st, now)
 	end
 	st.swim = false
 	-- the big jump: on take-off hold the upward speed that reaches MONSTER_JUMP (gravity 10)
-	if InputPressed("jump", p) and IsPlayerGrounded(p) and not mantleActive(p) and not ehGooTrapped(p) and ehStaminaUse(p, JUMP_STAMINA) then st.jumpT = now; jumpT = now end
+	local grounded = IsPlayerGrounded(p)
+	if grounded then st.djUsed = false end
+	if InputPressed("jump", p) and grounded and not mantleActive(p) and not ehGooTrapped(p) and ehStaminaUse(p, JUMP_STAMINA) then st.jumpT = now; jumpT = now
+	elseif InputPressed("jump", p) and not grounded and not st.djUsed and ehUpLevel(p, "djump") > 0 and now - st.jumpT > 0.15
+		and not mantleActive(p) and not ehGooTrapped(p) and ehStaminaUse(p, JUMP_STAMINA) then
+		st.djUsed, st.djT = true, now                            -- the double jump (its upgrade): a second take-off in mid-air,
+		st.flapN = (st.flapN or 0) + 1                            --  its wings flap (every machine: shared.ehFlap)
+		flapPub[p] = st.flapN
+		shared.ehFlap = copyTable(flapPub)
+	end
 	if now - st.jumpT < JUMP_BOOST_TIME then
 		local jv = GetPlayerVelocity(p)
 		jv[2] = math.sqrt(2 * 10 * MONSTER_JUMP)
+		SetPlayerVelocity(jv, p)
+	elseif now - (st.djT or -100) < JUMP_BOOST_TIME then
+		local jv = GetPlayerVelocity(p)
+		jv[2] = math.sqrt(2 * 10 * DJUMP_HEIGHT)
 		SetPlayerVelocity(jv, p)
 	end
 	local v2 = GetPlayerVelocity(p)
@@ -2020,7 +2053,7 @@ function ehServerTick(dt, ms, hunting)
 	for _, m in ipairs(live) do
 		local st = mon[m]
 		if not st then                                       -- (calls staggered: two monsters don't call together)
-			st = {stamina = STAMINA, exhausted = false, run = false, jumpT = -100, nextCall = now + 2 + math.random() * 6, callN = 0}
+			st = {stamina = ehStaminaMax(m), exhausted = false, run = false, jumpT = -100, nextCall = now + 2 + math.random() * 6, callN = 0}
 			mon[m] = st
 		end
 		if now >= st.nextCall then                           -- its calls, at random, the same for everyone
@@ -2037,7 +2070,7 @@ function ehServerTick(dt, ms, hunting)
 	local stam, sk = {}, ""
 	for _, m in ipairs(live) do
 		local st = mon[m]
-		stam[m] = {s = st.stamina / STAMINA, run = st.run, ex = st.exhausted}
+		stam[m] = {s = st.stamina / ehStaminaMax(m), run = st.run, ex = st.exhausted}
 		sk = sk .. string.format("%d:%.2f%s%s ", m, stam[m].s, tostring(st.run), tostring(st.exhausted))
 	end
 	if sk ~= stamKey then                                    -- (published when it changes)

@@ -38,6 +38,21 @@ press Start. Players who don't pick a team join the humans; if nobody picks the 
 
 Round time, head start, time of day, and whether Global chat stays on during the round.
 
+## Works with these mods (optional)
+
+- [Clamber: Climbing, Ladders & Mantling](https://steamcommunity.com/sharedfiles/filedetails/?id=3835599376): ladders
+  and climbable walls for everyone. Clickers climb too, with their own climbing animation, and reach higher.
+- [McPuppet Inventory System](https://steamcommunity.com/sharedfiles/filedetails/?id=3840357667): gold and an
+  inventory for the humans. Everyone earns gold each round (+120 a win, -80 a loss, never below 0), a clicker +10 for
+  every human it catches, and nobody loses gold or items when they die. Clickers spend their gold in their own upgrade
+  shop (I): more stamina, a double jump with wings, a laser beam from the maw (hold LMB 2 s; all your stamina, 45 s to
+  recharge) and faster echolocation, each showing on the clicker's body.
+- [McPuppet Basic Guns Pack Vol 1](https://steamcommunity.com/sharedfiles/filedetails/?id=3840508226) and
+  [McPuppet Basic Tools Pack Vol 1](https://steamcommunity.com/sharedfiles/filedetails/?id=3840508314): with the
+  Inventory, more guns and tools for the humans.
+
+Without them the game plays as described above.
+
 ## Proximity Comms
 
 With the [Proximity Comms](https://steamcommunity.com/sharedfiles/filedetails/?id=3812301496) mod enabled, the
