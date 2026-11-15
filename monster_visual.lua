@@ -103,7 +103,8 @@ local function mvSetInvisible(MV, inv)
 end
 
 -- ---------------------------------------------------------------- its upgrades on its body (eh_upgrade.lua)
--- attack power level k: the torso and arms swapped for RIG_EXTRA.tiers[...][k] (thicker and thicker); the double jump:
+-- attack power level k: the torso and arms swapped for RIG_EXTRA.tiers[...][k] (thicker and thicker); health level k:
+-- RIG_EXTRA.chest[k] attached to the torso (a bigger chest); the double jump:
 -- bat wings on its back (attached to the torso, folded; spread and flapped on each double jump - shared.ehFlap);
 -- the laser: a glowing insert in its maw (attached to the head), pulsing, brighter while it charges or fires
 local function rigCenter(name)
@@ -163,6 +164,12 @@ local function mvUpgrades(MV, m, now)
 	if mvAttach(MV, "wing_r", RIG_EXTRA.wing_r, wings) then changed = true end
 	local laser = ehUpLevel(m, "laser") > 0
 	if mvAttach(MV, "mouthglow", RIG_EXTRA.mouthglow, laser) then changed = true end
+	local chest = math.max(0, math.min(5, ehUpLevel(m, "health")))   -- (health: a bigger chest per level, on the torso)
+	if MV.chest ~= chest and RIG_EXTRA.chest then
+		mvAttach(MV, "chest", nil, false)
+		if chest > 0 then mvAttach(MV, "chest", RIG_EXTRA.chest[chest], true) end
+		MV.chest, changed = chest, true
+	end
 	if changed then mvRebuildShapes() end
 	-- the flap: spread out fast, two beats, folded back
 	local fl = type(shared.ehFlap) == "table" and shared.ehFlap[m] or 0

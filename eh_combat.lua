@@ -28,14 +28,16 @@ HIT_DAMAGE = 0.5           -- of a human's health per hit: half (AgeOfAlgorithms
 ATTACK_UP = 0.05           -- + per attack power level (the upgrade, eh_upgrade.lua: +5 of 100, up to +25)
 -- the laser beam (its upgrade, the user 2026-11-15): LMB held past LASER_HOLD starts the charge (a tap stays the swipe);
 -- after LASER_CHARGE s held, letting go fires a thick beam from its maw where it then looks; it takes all its stamina.
--- Only a human the beam touches is hurt (LASER_BODY: the beam's radius + a body's), LASER_DAMAGE of their health, with
--- their cry (heard by the clickers); a modest hole where it strikes
+-- A human the beam touches (LASER_BODY: the beam's radius + a body's) or who stands in the blast where it strikes
+-- (LASER_BLAST m from the impact, the user 2026-11-15) loses LASER_DAMAGE of their health, with their cry (heard by the
+-- clickers); a hole where it strikes
 LASER_HOLD = 0.35
 LASER_CHARGE = 2.0
 LASER_RANGE = 90
 LASER_DAMAGE = 0.8
 LASER_BODY = 0.5
-LASER_HOLE = {1.2, 0.9, 0.6}    -- m: soft / medium / hard materials (the user: "not too big")
+LASER_HOLE = {1.6, 1.2, 0.8}    -- m: soft / medium / hard materials (the user: "not too big", then "a little bigger")
+LASER_BLAST = 1.8               -- m from the impact: humans in it are hit too (about the hole's size, a body's width more)
 LASER_CD = 45                   -- s after a shot before the next charge (the user)
 GOLD_KILL = 10                  -- the Inventory mod's gold a clicker gets for each human it catches (the user, 2026-11-15)
 DOWN_HEALTH = 0.05         -- a downed human's engine health (kept above 0: the engine's death is "out")
@@ -63,6 +65,9 @@ SWIPE_DEEP = 0.7
 SWIPE_SHOVE = 9                 -- m/s given to a dynamic body it strikes (doors burst open) ...
 SWIPE_SHOVE_MASS = 400          -- ... up to this much mass (kg; heavier things get less)
 HP_MAX = 100
+HP_UP = 0.1                -- + of HP_MAX per health level (the upgrade, eh_upgrade.lua: up to 5, 100 -> 150)
+-- its full HP: HP_MAX, more with the health upgrade
+function ehHPMax(m) return HP_MAX * (1 + HP_UP * (ehUpLevel and ehUpLevel(m, "health") or 0)) end
 HP_REGEN_DELAY = 8         -- s after the last damage before it heals (AgeOfAlgorithms)
 HP_REGEN = 2               -- hp per s ("very slowly": empty to full in 50 s)
 HIT_SLOW_TIME = 0.1        -- s it is slowed after each hit (AgeOfAlgorithms)
@@ -152,8 +157,8 @@ local function stat(p, k, n)
 end
 
 function ehCombatReset()
-	for _, st in pairs(CB) do
-		st.hp, st.lastDmg, st.stunEnd, st.nextAttack = HP_MAX, -100, 0, 0
+	for m, st in pairs(CB) do
+		st.hp, st.lastDmg, st.stunEnd, st.nextAttack = ehHPMax(m), -100, 0, 0
 	end
 	CBG.catches, CBG.stats, CBG.boomBy = {}, {}, 0
 	CBG.down, CBG.downKey = {}, nil
@@ -359,9 +364,34 @@ local function meleeHits()
 	CBG.meleeSeen = last
 end
 
+-- the Tools Pack's blowtorch (its mctools.lua, host keys every tick: mctools.torch.<p> while it burns, .shape = what the
+-- flame touches, 0 = nothing in reach): on a clicker's hit box or model it burns TORCH_RATE of its full HP a second
+-- (the user's 4 % for the torch on villagers; fire ignores armour, clickers have none)
+TORCH_RATE = 0.04
+local function torchHits(now)
+	local dt = math.min(0.1, now - (CBG.torchT or now))
+	CBG.torchT = now
+	if dt <= 0 then return end
+	for q in Players() do
+		local sh = not CB[q] and GetBool("mctools.torch." .. q) and GetInt("mctools.torch." .. q .. ".shape") or 0
+		if sh ~= 0 then
+			local h = CBG.hitShapes[sh]
+			local m = h and h.m or nil
+			if not m and monsterVisualBodies and IsHandleValid(sh) then  -- (or its model's parts: the host draws them too)
+				local body = GetShapeBody(sh)
+				for mm in pairs(CB) do
+					for _, b in ipairs(monsterVisualBodies(mm)) do if b == body then m = mm end end
+				end
+			end
+			if m and CB[m] then damage(m, TORCH_RATE * ehHPMax(m) * dt, "fire", q) end
+		end
+	end
+end
+
 local function takeHits(ms)
 	meleeHits()
 	local now = GetTime()
+	torchHits(now)
 	local swung = {}                                             -- humans whose sledge swing lands this frame
 	for q in Players() do                                        -- (explosions say nobody: the last to use an explosive)
 		if not CB[q] and BOOM_TOOLS[GetPlayerTool(q)] and InputPressed("usetool", q) then CBG.boomBy = q end
@@ -617,7 +647,9 @@ local function fireLaser(m)
 		if not CB[q] and GetPlayerHealth(q) > 0 and not (EH_OUT and EH_OUT[q]) then
 			local feet = GetPlayerTransform(q).pos
 			local low = CBG.down[q] or (ehInWater and ehInWater(q))
-			if segDist(from, to, VecAdd(feet, Vec(0, 0.2, 0)), VecAdd(feet, Vec(0, low and 0.6 or 1.7, 0))) <= LASER_BODY then
+			local b0, b1 = VecAdd(feet, Vec(0, 0.2, 0)), VecAdd(feet, Vec(0, low and 0.6 or 1.7, 0))
+			if segDist(from, to, b0, b1) <= LASER_BODY                    -- (the beam itself, or the blast where it struck)
+				or (hit and segDist(to, to, b0, b1) <= LASER_BLAST) then
 				hurtHuman(q, m, LASER_DAMAGE)                     -- (their cry: the clickers hear where they are)
 			end
 		end
@@ -772,9 +804,9 @@ local function monsterTick(dt, m, hunting, now)
 	if stunned then
 		DisablePlayerInput(m)
 	elseif st.stunEnd > 0 then
-		st.stunEnd, st.hp = 0, HP_MAX                            -- (back on its feet, at full strength)
-	elseif st.hp < HP_MAX and now - st.lastDmg >= HP_REGEN_DELAY then
-		st.hp = math.min(HP_MAX, st.hp + HP_REGEN * dt)
+		st.stunEnd, st.hp = 0, ehHPMax(m)                        -- (back on its feet, at full strength)
+	elseif st.hp < ehHPMax(m) and now - st.lastDmg >= HP_REGEN_DELAY then
+		st.hp = math.min(ehHPMax(m), st.hp + HP_REGEN * dt)
 	end
 	local shopping = GetBool("echohunt.shop." .. m)                -- (its upgrade screen is open: clicks are buttons)
 	if hunting and not stunned and not shopping then
@@ -815,7 +847,7 @@ function ehCombatTick(dt, ms, hunting)
 		end
 	end
 	for _, m in ipairs(live) do
-		if not CB[m] then CB[m] = newState() end
+		if not CB[m] then CB[m] = newState(); CB[m].hp = ehHPMax(m) end
 	end
 	takeHits(live)
 	friendlyFire(hunting)
@@ -826,7 +858,7 @@ function ehCombatTick(dt, ms, hunting)
 	for _, m in ipairs(live) do
 		local st = CB[m]
 		local stun = now < st.stunEnd and math.ceil(st.stunEnd - now) or 0
-		hp[m] = {hp = math.floor(st.hp + 0.5), max = HP_MAX, stun = stun}
+		hp[m] = {hp = math.floor(st.hp + 0.5), max = math.floor(ehHPMax(m) + 0.5), stun = stun}
 		key = key .. string.format("%d:%d/%d ", m, hp[m].hp, stun)
 	end
 	if key ~= CBG.hpKey then                                     -- (published when it changes)

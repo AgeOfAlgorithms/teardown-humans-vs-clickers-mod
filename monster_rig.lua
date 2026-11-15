@@ -166,7 +166,8 @@ RIG = {
 }
 
 -- Upgrade looks (tools/monster/upgrades.py), same frame and conventions as RIG (root frame, rest pose, m):
--- tiers[part][k]: the stamina tier k (1..5) file replacing that part; its voxel box has the SAME centre as the
+-- chest[k]: the health level k (1..5) piece, a child of the torso (no own rotation; pivot = center).
+-- tiers[part][k]: the attack-power tier k (1..5) file replacing that part; its voxel box has the SAME centre as the
 --   base part (RIG center), so swap the file only. Same tier for all five parts at once.
 -- wing_l / wing_r: folded bat wings, children of the torso modelled in their folded rest pose; spread = turn
 --   by an angle (0..maxAngle degrees) about axis through pivot (the hinge knob; 90 = straight out sideways).
@@ -204,5 +205,42 @@ RIG_EXTRA = {
 		center = {0, 3.55, 0},
 		file = "MOD/vox/monster/demon_mouthglow.vox",
 		size = {8, 12, 4},
+	},
+	chest = {
+		{
+			parent = "torso",
+			pivot = {0, 2.6, 0.1},
+			center = {0, 2.6, 0.1},
+			file = "MOD/vox/monster/demon_chest_t1.vox",
+			size = {12, 16, 8},
+		},
+		{
+			parent = "torso",
+			pivot = {0, 2.55, 0.1},
+			center = {0, 2.55, 0.1},
+			file = "MOD/vox/monster/demon_chest_t2.vox",
+			size = {12, 16, 8},
+		},
+		{
+			parent = "torso",
+			pivot = {0, 2.6, 0.15},
+			center = {0, 2.6, 0.15},
+			file = "MOD/vox/monster/demon_chest_t3.vox",
+			size = {16, 20, 12},
+		},
+		{
+			parent = "torso",
+			pivot = {0, 2.6, 0.05},
+			center = {0, 2.6, 0.05},
+			file = "MOD/vox/monster/demon_chest_t4.vox",
+			size = {16, 20, 16},
+		},
+		{
+			parent = "torso",
+			pivot = {0, 2.55, 0.05},
+			center = {0, 2.55, 0.05},
+			file = "MOD/vox/monster/demon_chest_t5.vox",
+			size = {16, 20, 16},
+		},
 	},
 }
