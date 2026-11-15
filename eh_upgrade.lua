@@ -2,19 +2,22 @@
 -- Only while the host runs that mod (inventory.present). A clicker opens its own upgrade screen with the inventory's
 -- key (inventory.key.open, "i") - in the lobby once on the Clickers team, and in a round as a clicker - and buys:
 --   stamina   600 a level, +10 % of its bar each, up to 5 (+50 %)         (eh_monster.lua ehStaminaMax)
+--   attack    600 a level, +5 damage a strike (of a human's 100) each, up to 5 (+25)   (eh_combat.lua hurtHuman)
 --   djump    1200, a second jump in mid-air, its wings flap                (eh_monster.lua monsterMove)
 --   laser    2500, hold LMB 2 s and let go: a beam from its maw            (eh_combat.lua, eh_laser.lua)
 --   echo      600 a level, its echolocation cooldown -1 s after a miss and -2 s after a hit, up to 5 (eh_monster.lua)
--- Each level shows on its body (monster_visual.lua: thicker arms and shoulders, wings, a glowing maw).
+-- They show on its body (monster_visual.lua): attack power thicker arms and shoulders, the double jump wings, the
+-- laser a glowing maw; stamina shows nothing (the user, 2026-11-15).
 -- Paid through the inventory's all-or-nothing spend (inventory.spend.<p> "token:n:reason", answered in
 -- inventory.spent.<token> = "ok" / "no"). Kept by player name in savegame.mod.eh.up, as long as the inventory keeps
 -- its gold: cleared whenever inventory.session changes (its NEW SESSION, or every map with its "Reset every map").
--- Published as shared.ehUp[p] = {stamina, djump, laser, echo} (ehUpLevel in eh_monster.lua reads it).
+-- Published as shared.ehUp[p] = {stamina, attack, djump, laser, echo} (ehUpLevel in eh_monster.lua reads it).
 --   server: ehUpServerTick(); server.ehUpBuy(p, id) (ServerCall from the screen)
 --   client: ehUpClientTick(); ehUpDraw()   (ehUpOpen(): the screen is up)
 
 UPGRADES = {
-	{id = "stamina", name = "Stamina", price = 600, max = 5, info = "+10 % stamina per level, up to +50 %. Thicker arms and shoulders."},
+	{id = "stamina", name = "Stamina", price = 600, max = 5, info = "+10 % stamina per level, up to +50 %."},
+	{id = "attack", name = "Attack power", price = 600, max = 5, info = "+5 damage per strike per level, up to +25. Thicker arms and shoulders."},
 	{id = "djump", name = "Double jump", price = 1200, max = 1, info = "Jump again in mid-air. Grows wings."},
 	{id = "laser", name = "Laser beam", price = 2500, max = 1, info = "Hold LMB 2 s, let go: a beam from your maw. Takes all your stamina."},
 	{id = "echo", name = "Faster echolocation", price = 600, max = 5, info = "Echolocation cooldown per level: -1 s after a miss, -2 s after a hit."},

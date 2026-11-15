@@ -45,11 +45,15 @@ Round time, head start, time of day, and whether Global chat stays on during the
 - [McPuppet Inventory System](https://steamcommunity.com/sharedfiles/filedetails/?id=3840357667): gold and an
   inventory for the humans. Everyone earns gold each round (+120 a win, -80 a loss, never below 0), a clicker +10 for
   every human it catches, and nobody loses gold or items when they die. Clickers spend their gold in their own upgrade
-  shop (I): more stamina, a double jump with wings, a laser beam from the maw (hold LMB 2 s; all your stamina, 45 s to
-  recharge) and faster echolocation, each showing on the clicker's body.
-- [McPuppet Basic Guns Pack Vol 1](https://steamcommunity.com/sharedfiles/filedetails/?id=3840508226) and
+  shop (I): more stamina, more attack power (+5 a level, up to +25: thicker arms), a double jump with wings, a laser
+  beam from the maw (hold LMB 2 s; all your stamina, 45 s to recharge) and faster echolocation. The humans' round
+  tools are items on its hotbar, handed out each round and taken back at its end.
+- [McPuppet Basic Clothing Pack Vol 1](https://steamcommunity.com/sharedfiles/filedetails/?id=3840291332): with the
+  Inventory, armour for the humans; it reduces the clickers' strikes and laser.
+- [McPuppet Basic Melee Weapons Pack Vol 1](https://steamcommunity.com/sharedfiles/filedetails/?id=3840291496),
+  [McPuppet Basic Guns Pack Vol 1](https://steamcommunity.com/sharedfiles/filedetails/?id=3840508226) and
   [McPuppet Basic Tools Pack Vol 1](https://steamcommunity.com/sharedfiles/filedetails/?id=3840508314): with the
-  Inventory, more guns and tools for the humans.
+  Inventory, more weapons and tools for the humans; the melee weapons and guns hurt the clickers too.
 
 Without them the game plays as described above.
 

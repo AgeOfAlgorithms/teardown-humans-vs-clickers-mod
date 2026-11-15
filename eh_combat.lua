@@ -25,6 +25,7 @@ ATTACK_CD = 0.9            -- s between swings
 GRAB_RANGE = 6.1           -- m from the monster's head to a human's chest: its reach (3.6 + 70 %, AgeOfAlgorithms)
 GRAB_CONE = 0.72           -- cos of the cone around its aim (~44 degrees)
 HIT_DAMAGE = 0.5           -- of a human's health per hit: half (AgeOfAlgorithms; no grab any more)
+ATTACK_UP = 0.05           -- + per attack power level (the upgrade, eh_upgrade.lua: +5 of 100, up to +25)
 -- the laser beam (its upgrade, the user 2026-11-15): LMB held past LASER_HOLD starts the charge (a tap stays the swipe);
 -- after LASER_CHARGE s held, letting go fires a thick beam from its maw where it then looks; it takes all its stamina.
 -- Only a human the beam touches is hurt (LASER_BODY: the beam's radius + a body's), LASER_DAMAGE of their health, with
@@ -485,9 +486,16 @@ end
 
 local function hurtHuman(q, m, dmg)
 	dmg = dmg or HIT_DAMAGE
-	-- (the McPuppet Inventory System's armour: its wear engine gives back the blocked share of any health a player
-	-- loses, ours too - applying inventory.stat.<q>.defense here as well counted it twice, measured in game: a 0.5
-	-- strike took 0.18 at defense 0.41 instead of 0.30. Armour does not yet save a human from being downed)
+	-- (the McPuppet Inventory System's armour, 1.2.4+, its MODDING.md "How armour works": the blow is reduced here, so
+	-- armour also decides whether the human goes down - taken = max(0, min(dmg - immunity, dmg * (1 - defense))), the
+	-- stronger of the two; inventory.armored.<q> tells its wear engine not to give the blocked share back as well -
+	-- without the key it counted twice, measured in game: a 0.5 strike took 0.18 at defense 0.41 instead of 0.30)
+	local inv = GetBool("inventory.present")
+	if inv then
+		local def = math.max(0, math.min(1, GetFloat("inventory.stat." .. q .. ".defense")))
+		local imm = math.max(0, GetFloat("inventory.stat." .. q .. ".immunity"))
+		dmg = math.max(0, math.min(dmg - imm, dmg * (1 - def)))
+	end
 	local d = CBG.down[q]
 	if d then
 		d.bar = d.bar - DOWN_HIT                                    -- (down: the bar goes a little faster)
@@ -495,6 +503,7 @@ local function hurtHuman(q, m, dmg)
 	else
 		local h0 = GetPlayerHealth(q)
 		local h = h0 - dmg
+		if inv then SetBool("inventory.armored." .. q, true) end    -- (the same tick as the health change below)
 		stat(m, "dmg", 100 * math.min(dmg, h0))
 		if h <= 0.02 then                                        -- downed: crawling, the bar draining
 			CBG.down[q] = {bar = 1, by = m, rev = 0, helper = nil, tool = GetPlayerTool(q), noiseT = 0}
@@ -558,7 +567,7 @@ local function attack(m)
 	end
 	local q = hitTarget(m, head, aim)
 	act(m, st.swingL and "swing_l" or "swing_r", q and true or false)
-	if q then hurtHuman(q, m); return end
+	if q then hurtHuman(q, m, HIT_DAMAGE + ATTACK_UP * (ehUpLevel and ehUpLevel(m, "attack") or 0)); return end
 	rejectOwn(m)
 	local hit, d, _, shape = QueryRaycast(head, aim, SWIPE_RANGE)
 	if hit then                                                   -- (claws tearing what it hits)

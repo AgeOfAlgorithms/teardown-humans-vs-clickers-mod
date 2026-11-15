@@ -75,7 +75,7 @@ local function mvSpawn(MV)
 				rest = Transform(Vec(pt.center[1], pt.center[2], pt.center[3]), Quat())}
 		end
 	end
-	MV.invisible, MV.tier = nil, 0                              -- (the base parts: no stamina tier yet)
+	MV.invisible, MV.tier = nil, 0                              -- (the base parts: no attack power tier yet)
 	mvRebuildShapes()
 end
 
@@ -103,7 +103,7 @@ local function mvSetInvisible(MV, inv)
 end
 
 -- ---------------------------------------------------------------- its upgrades on its body (eh_upgrade.lua)
--- stamina level k: the torso and arms swapped for RIG_EXTRA.tiers[...][k] (thicker and thicker); the double jump:
+-- attack power level k: the torso and arms swapped for RIG_EXTRA.tiers[...][k] (thicker and thicker); the double jump:
 -- bat wings on its back (attached to the torso, folded; spread and flapped on each double jump - shared.ehFlap);
 -- the laser: a glowing insert in its maw (attached to the head), pulsing, brighter while it charges or fires
 local function rigCenter(name)
@@ -146,7 +146,7 @@ end
 local function mvUpgrades(MV, m, now)
 	if not RIG_EXTRA or not ehUpLevel then return end
 	local changed = false
-	local tier = math.max(0, math.min(5, ehUpLevel(m, "stamina")))
+	local tier = math.max(0, math.min(5, ehUpLevel(m, "attack")))
 	if MV.tier ~= tier then
 		for _, q in ipairs(MV.parts) do
 			local files = RIG_EXTRA.tiers and RIG_EXTRA.tiers[q.name]
