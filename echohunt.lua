@@ -127,6 +127,7 @@ function server.init()
 	ehServerInit()
 	ehDecoyServerInit()                                           -- (eh_decoy.lua: the noisemaker tool)
 	ehGooServerInit()                                             -- (eh_goo.lua: the goo grenade)
+	ehInvDeclare()                                                -- (the McPuppet Inventory: our tools are its items)
 	publish(true)
 end
 
@@ -221,6 +222,52 @@ function noisemakerDraw(humans)
 end
 
 -- a human's starting tools
+-- The McPuppet Inventory System (when the host runs it) carries the humans' round tools as items on its hotbar (its
+-- hotkeys and the game's tool slots would clash): our goo and noisemaker declared as its tools (every machine), the
+-- game's gun / sledge / plank too when no pack of it declares them; given at round start (inventory.give), spent
+-- through inventory.use, taken back at round end (inventory.take). Without it: the game's slots, as always.
+local INV_ROUND_TAKE = "gun:1 sledge:1 plank:1 " .. GOO_TOOL .. " " .. DECOY_TOOL   -- (one of each the round gave; a
+                                                                                    --  bought one of the same kind stays)
+function ehInvDeclare()
+	for _, d in ipairs({{GOO_TOOL, GOO_AMMO, "images/eh_goo.png"}, {DECOY_TOOL, 1, "images/eh_noisemaker.png"}}) do
+		local k = "inventory.tools." .. d[1]
+		SetBool(k, true); SetInt(k .. ".price", -1); SetInt(k .. ".ammo", d[2]); SetBool(k .. ".spent", true)
+		SetString(k .. ".icon", d[3])
+	end
+	for _, id in ipairs({"gun", "sledge", "plank"}) do       -- (a pack's own keys win when it runs after us)
+		local k = "inventory.tools." .. id
+		if not HasKey(k) and #ListKeys(k) == 0 then SetBool(k, true); SetInt(k .. ".price", -1) end
+	end
+end
+
+-- the round's tools for player p through the Inventory: the loadout as items
+local function invGiveLoadout(p, noisemaker)
+	local l = {}
+	for _, t in ipairs(HUMAN_LOADOUT) do l[#l + 1] = t[2] > 0 and string.format("%s:1:%d", t[1], t[2]) or t[1] end
+	l[#l + 1] = string.format("%s:1:%d", GOO_TOOL, GOO_AMMO)
+	if noisemaker then l[#l + 1] = DECOY_TOOL .. ":1:1" end
+	local k = "inventory.give." .. p
+	local was = GetString(k)
+	SetString(k, (was == "" and "" or was .. " ") .. table.concat(l, " "))
+end
+
+-- the round's tools taken back from everyone who played it (the dead too: kept inventories outlive the game)
+local function invTakeLoadout()
+	if not GetBool("inventory.present") then return end
+	for p in pairs(G.roster or {}) do
+		if IsPlayerValid(p) and not isMonster(p) then
+			local k = "inventory.take." .. p
+			local was = GetString(k)
+			SetString(k, (was == "" and "" or was .. " ") .. INV_ROUND_TAKE)
+		end
+	end
+end
+
+-- the mode stops (mid-round too): the round's tools back off everyone, as at its end
+function server.destroy()
+	invTakeLoadout()
+end
+
 local function humanLoadout(noisemaker)
 	local l = {}
 	for i, t in ipairs(HUMAN_LOADOUT) do l[i] = t end
@@ -253,7 +300,12 @@ local function beginRound()
 	for i, p in ipairs(humans) do
 		local t = #order > 0 and order[(i - 1) % #order + 1] or nil
 		used[#used + 1] = t
-		spawnSpawnPlayer(clearSpawn(t, 1.9), humanLoadout(noisemakers[p]), p)
+		if GetBool("inventory.present") then                       -- (the Inventory: its hotbar carries them, not the slots)
+			spawnSpawnPlayer(clearSpawn(t, 1.9), {}, p)
+			invGiveLoadout(p, noisemakers[p])
+		else
+			spawnSpawnPlayer(clearSpawn(t, 1.9), humanLoadout(noisemakers[p]), p)
+		end
 	end
 	G.mspawns = {}
 	local ts = monsterSpawns(used, #monsters)
@@ -274,6 +326,7 @@ local function beginRound()
 end
 
 local function endRound(winner)
+	invTakeLoadout()                                             -- (the Inventory: the round's tools back off everyone)
 	G.phase, G.winner, G.t = "over", winner, 0
 	local k = winner == "humans" and "echohunt.tally.h" or "echohunt.tally.m"   -- (the session's: survives Play Again)
 	SetInt(k, GetInt(k) + 1)
@@ -372,7 +425,7 @@ local function inventoryTick()
 	local playing = teamsIsSetup() and (G.phase == "hide" or G.phase == "hunt")
 	local set = {}
 	for p in Players() do set[p] = not playing or isMonster(p) or G.late[p] == true end
-	inventoryBlocks(set, INV_KEEP)
+	inventoryBlocks(set, GetBool("inventory.present") and "" or INV_KEEP)   -- (the Inventory: our tools are its items)
 	-- a human caught (dead) loses nothing (the user, 2026-11-15): no gold (the Inventory's death share off) and none of
 	-- what they carry or wear (inventory.keepondeath: nothing dropped where they fall)
 	if not HasKey("inventory.deathloss") or GetFloat("inventory.deathloss") ~= 0 then SetFloat("inventory.deathloss", 0) end
@@ -492,6 +545,7 @@ function client.init()
 	ehClientInit()
 	ehDecoyClientInit()
 	ehGooClientInit()
+	ehInvDeclare()                                                -- (the Inventory: our tools are its items, every machine)
 end
 
 function client.destroy()

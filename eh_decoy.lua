@@ -72,8 +72,13 @@ function ehDecoyServerTick(active)
 		for q in Players() do
 			if GetPlayerTool(q) == DECOY_TOOL and InputPressed("usetool", q) and GetPlayerHealth(q) > 0 and not ehIsMonster(q)
 				and GetToolAmmo(DECOY_TOOL, q) >= 1 and not DS.away[q] then
-				DS.away[q] = now + DECOY_PUT_AWAY                    -- (its ammo stays until then: none and the engine
-				throw(q)                                             --  might switch tools at once, no throw pose)
+				throw(q)
+				if GetBool("inventory.present") then                 -- (the McPuppet Inventory carries it: used, it goes)
+					local k = "inventory.use." .. q .. "." .. DECOY_TOOL
+					SetFloat(k, GetFloat(k) + 1)
+				else
+					DS.away[q] = now + DECOY_PUT_AWAY                -- (its ammo stays until then: none and the engine
+				end                                                  --  might switch tools at once, no throw pose)
 			end
 		end
 	end

@@ -410,7 +410,11 @@ function ehGooServerTick(active, dt)
 				GS.nextThrow[q] = now + GOO_CD
 				local left = GetToolAmmo(GOO_TOOL, q) - 1
 				throw(q)
-				if left >= 1 then SetToolAmmo(GOO_TOOL, left, q)
+				if GetBool("inventory.present") then              -- (the McPuppet Inventory carries it: one used, it takes
+					local k = "inventory.use." .. q .. "." .. GOO_TOOL  --  it off the item, the last one gone with it)
+					SetFloat(k, GetFloat(k) + 1)
+					if left < 1 then GS.nextThrow[q] = math.huge end
+				elseif left >= 1 then SetToolAmmo(GOO_TOOL, left, q)
 				else GS.nextThrow[q] = math.huge; GS.away[q] = now + DECOY_PUT_AWAY end
 			end
 		end

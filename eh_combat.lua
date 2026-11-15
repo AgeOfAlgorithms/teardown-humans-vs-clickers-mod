@@ -75,6 +75,8 @@ CARRY_THROW = 14
 CARRY_HOLD = 2.0           -- m at least, a carried thing is held out in front of its big body
 SLEDGE_CD = 0.8            -- s: a sledge swing's length - clicks within it are the same swing
 DMG_EXPLOSION = 70         -- at the centre of a size-1 explosion, less with distance
+DMG_MELEE = 40             -- the McPuppet Inventory's melee weapons: power (the share of a human's health one blow takes,
+                           -- 0..1) x this, once per swing - a 0.5 weapon takes 20 (two sledge blows)
 HIT_LAYER = 128            -- the hit boxes' collision layer: bullets hit it, players' CollisionMask leaves it out
 -- players and the world's rays (mantle, camera, fog, scan, the models' headroom) skip the hit boxes (128) and the
 -- monsters' models (MV_LAYER 32). Players collided with layer 32: the monster stood on its own model (placed at its feet
@@ -176,7 +178,7 @@ local function boxesSpawn(m)
 	st.boxes, st.bodies = {}, {}
 	for _, hb in ipairs(HIT_BOXES) do
 		local sx, sy, sz = hb.size[1], hb.size[2], hb.size[3]
-		local xml = string.format("<body tags='ehhit ehowner=%d'><voxbox tags='invisible unbreakable ehhit' pos='%.2f %.2f %.2f' size='%d %d %d' color='0 0 0'/></body>",
+		local xml = string.format("<body tags='ehhit ehowner=%d'><voxbox tags='invisible unbreakable nohole ehhit' pos='%.2f %.2f %.2f' size='%d %d %d' color='0 0 0'/></body>",
 			m, -sx * 0.05, -sy * 0.05, -sz * 0.05, sx, sy, sz)          -- (ehowner: whose boxes - its own ping passes through them)
 		local ents = Spawn(xml, Transform(Vec(0, -300, 0)))
 		for _, e in ipairs(ents or {}) do
@@ -327,7 +329,37 @@ local function sledgeBlow(point, now)
 	return false
 end
 
+-- the McPuppet Inventory System's melee weapons (its melee.lua: a blow on anything not a player is announced in
+-- inventory.melee.hit.*, the counter last): a blow on a clicker's hit boxes or model hurts it, once per swing
+CBG.meleeSeen, CBG.meleeSwing, CBG.meleeN = nil, {}, 0
+local function meleeHits()
+	if not GetBool("inventory.melee.hits") then return end
+	local last = GetInt("inventory.melee.hit.last")
+	if CBG.meleeSeen == nil then CBG.meleeSeen = last; return end  -- (blows before we looked: not counted)
+	for n = math.max(CBG.meleeSeen + 1, last - 15), last do
+		local k = "inventory.melee.hit." .. (n % 16) .. "."
+		local sh, body = GetInt(k .. "shape"), GetInt(k .. "body")
+		local h = CBG.hitShapes[sh]
+		local m = h and h.m or nil
+		if not m and monsterVisualBodies then                     -- (or its model's parts: the host draws them too)
+			for mm in pairs(CB) do
+				for _, b in ipairs(monsterVisualBodies(mm)) do if b == body then m = mm end end
+			end
+		end
+		local key = m and (GetInt(k .. "swing") .. ":" .. m) or nil
+		if m and CB[m] and not CBG.meleeSwing[key] then
+			CBG.meleeSwing[key] = true
+			CBG.meleeN = CBG.meleeN + 1
+			if CBG.meleeN > 256 then CBG.meleeSwing, CBG.meleeN = {[key] = true}, 1 end
+			local by = GetInt(k .. "attacker")
+			damage(m, DMG_MELEE * math.max(0, math.min(1, GetFloat(k .. "power"))), "melee", IsPlayerValid(by) and by or 0)
+		end
+	end
+	CBG.meleeSeen = last
+end
+
 local function takeHits(ms)
+	meleeHits()
 	local now = GetTime()
 	local swung = {}                                             -- humans whose sledge swing lands this frame
 	for q in Players() do                                        -- (explosions say nobody: the last to use an explosive)
@@ -453,6 +485,9 @@ end
 
 local function hurtHuman(q, m, dmg)
 	dmg = dmg or HIT_DAMAGE
+	-- (the McPuppet Inventory System's armour: its wear engine gives back the blocked share of any health a player
+	-- loses, ours too - applying inventory.stat.<q>.defense here as well counted it twice, measured in game: a 0.5
+	-- strike took 0.18 at defense 0.41 instead of 0.30. Armour does not yet save a human from being downed)
 	local d = CBG.down[q]
 	if d then
 		d.bar = d.bar - DOWN_HIT                                    -- (down: the bar goes a little faster)
@@ -1003,7 +1038,7 @@ function ehCombatDraw(isMonster)
 	local h = myHP()
 	if not h then return end
 	UiPush()                                                     -- its HP (top centre)
-	UiTranslate(UiCenter(), 46)
+	UiTranslate(UiCenter(), 124)                                 -- (under the round timer and its "humans left" line, not over them)
 	UiAlign("center middle")
 	UiColor(0, 0, 0, 0.55)
 	UiRect(324, 14)
