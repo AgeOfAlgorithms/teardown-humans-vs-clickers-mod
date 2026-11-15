@@ -7,7 +7,11 @@
 --                        frame); give each monster visual its own out table.
 --   a = {st, t, phase, speed, look, time, seed, headroom}:
 --     st       "idle" | "walk" | "run" | "crouch" | "crawl" | "swing_l" | "swing_r" | "grab" | "hold" | "scream" |
---              "dead" (unknown -> idle). crouch = a low creep on its legs; crawl = the four-limbed crawl (~1.6 m)
+--              "dead" | "climb" | "pullup" (unknown -> idle). crouch = a low creep on its legs; crawl = the four-limbed
+--              crawl (~1.6 m); climb = on a ladder / wall that is ahead (+z), claws reaching up it in a diagonal rhythm
+--              driven by phase (advance it by MONSTER_ANIM.climbStride per cycle of distance climbed; still = held);
+--              pullup = over a ledge ahead in a.dur s (t: 0 = hanging from it, a.dur = a knee up on top). Neither
+--              snaps to the ground nor blends under the headroom
 --     t        seconds in the state (one-shots: swing_l / swing_r MONSTER_ANIM.swing s, grab MONSTER_ANIM.grab s,
 --              scream MONSTER_ANIM.scream s; after that they hold their end pose = back near idle)
 --     phase    gait phase (radians): phase = phase + distance / MonsterStride(speed, headroom) * 2 * pi
@@ -33,9 +37,11 @@
 --   yaw about +y: positive turns toward +x (the monster's left); roll about +z: positive moves a hanging limb
 --   toward +x. E(c, i, pitch, yaw, roll) appends Ry(yaw) * Rx(pitch) * Rz(roll) to the part's local rotation.
 
-MONSTER_STATES = {"idle", "walk", "run", "crouch", "crawl", "swing_l", "swing_r", "grab", "hold", "scream", "dead"}
+MONSTER_STATES = {"idle", "walk", "run", "crouch", "crawl", "swing_l", "swing_r", "grab", "hold", "scream", "dead",
+	"climb", "pullup"}
 MONSTER_ANIM = {walkSpeed = 7.0, runSpeed = 11.0, blend0 = 7.5, blend1 = 10.5, walkStride = 3.6, runStride = 6.8,
-	crawlStride = 1.6, swing = 0.6, grab = 0.5, scream = 1.2, standing = 3.6, crawlTop = 1.6}
+	crawlStride = 1.6, swing = 0.6, grab = 0.5, scream = 1.2, standing = 3.6, crawlTop = 1.6,
+	climbStride = 1.4}   -- climb: metres climbed (up or sideways) per cycle of its limbs
 
 -- metres travelled per gait cycle (2 * pi of a.phase) at this speed; under a low headroom the gait turns into the crawl.
 -- Advance the phase with it: phase = phase + dist / MonsterStride(speed, headroom) * 2 * pi  (no foot sliding).
@@ -349,6 +355,66 @@ do
 		c.lift = 0.14 * max(0, -s * k)                        -- (the planted foot sinks at this point of the gait)
 	end
 
+	-- ---------------------------------------------------------------- climbing (Clamber's ladders / walls, ledges)
+	-- The wall is ahead (+z), the root at the player's feet, who hang CL_WALL m off it. Arms: an arm's world pitch
+	-- from hanging (0) through forward (-90) to overhead (-180); the reaching arm high and straight, the other low with
+	-- its elbow bent toward the wall, claws on it; legs the same, diagonally (the left arm with the right leg), knees
+	-- out like a spider's. The body is moved back off the wall (its chest is thicker than a human's).
+	local CL_BACK, CL_DROP = -0.22, -0.25        -- m the whole body moves back from the wall / down (hands at reach)
+	local CA_HI, CA_LO = {-166, 4}, {-118, 58}   -- an arm reaching high / pulling low: {upper arm world pitch, elbow}
+	local CG_HI, CG_LO = {-78, 104, -22}, {-28, 52, -12}   -- a leg high / low: {thigh, shin, foot} (local pitches)
+	local function climbArm(c, up, low, hand, side, w, lean)
+		E(c, up, lerp(CA_LO[1], CA_HI[1], w) - lean, 0, side * (20 - 6 * w))
+		E(c, low, lerp(CA_LO[2], CA_HI[2], w), 0, 0)
+		flex(c, hand, side, 26 - 14 * w, 12)                -- (claws hooked into the wall, spread)
+	end
+	local function climbLeg(c, up, low, foot, side, w)
+		E(c, up, lerp(CG_LO[1], CG_HI[1], w), 0, side * 12)
+		E(c, low, lerp(CG_LO[2], CG_HI[2], w), 0, 0)
+		E(c, foot, lerp(CG_LO[3], CG_HI[3], w), 0, 0)
+	end
+	local function climbPose(c, a, I)
+		local ph, time, seed = a.phase, a.time, a.seed
+		local s = sin(ph)                                    -- (held as it is when still: the limbs stay where they grip)
+		local wl, wr = smooth(0.5 + 0.5 * s), smooth(0.5 - 0.5 * s)   -- the left arm reaching high / the right
+		local lean = 10 + 2 * sin(time * 1.15 + seed)
+		E(c, I.torso, lean, 0, 5 * s)
+		climbArm(c, I.arm_l_up, I.arm_l_low, I.hand_l, 1, wl, lean)
+		climbArm(c, I.arm_r_up, I.arm_r_low, I.hand_r, -1, wr, lean)
+		climbLeg(c, I.leg_l_up, I.leg_l_low, I.foot_l, 1, wr)    -- (diagonal: the right arm high with the left leg)
+		climbLeg(c, I.leg_r_up, I.leg_r_low, I.foot_r, -1, wl)
+		headLook(c, I, a, -6, -lean - 22 + 8 * twitch(time, 0.8, seed), 18 * twitch(time, 0.5, seed + 3), 0)
+		E(c, I.jaw, 6 + 3 * sin(time * 1.15 + seed), 0, 0)
+		gmove(c, 0, CL_DROP, CL_BACK)
+	end
+	-- over a ledge ahead in a.dur s: hanging from it with both arms (0), the chest over the edge with the arms pushing
+	-- down on top (0.55), a knee up onto it, crouched (1). The player rises meanwhile (the root goes up with them)
+	local PU_LEAN = {0, 8, 0.55, 58, 1, 46}
+	local PU_ARM = {0, -168, 0.35, -150, 0.55, -40, 1, -8}   -- the arms' world pitch
+	local PU_ELB = {0, 6, 0.35, 40, 0.55, 30, 1, -4}
+	local PU_THL = {0, -40, 0.55, -60, 1, -112}              -- the left leg comes up onto the edge, the right trails
+	local PU_SHL = {0, 60, 0.55, 90, 1, 128}
+	local PU_THR = {0, -20, 0.55, -10, 1, -40}
+	local PU_SHR = {0, 30, 0.55, 40, 1, 70}
+	local PU_BACK = {0, CL_BACK, 0.55, -0.05, 1, 0}
+	local PU_DROP = {0, CL_DROP - 0.4, 0.55, -0.5, 1, -0.2}
+	local function pullupPose(c, a, I)
+		local k = clamp(a.t / max(0.2, a.dur or 0.8), 0, 1)
+		local time, seed = a.time, a.seed
+		local lean = keyed(k, PU_LEAN)
+		local arm, elb = keyed(k, PU_ARM), keyed(k, PU_ELB)
+		E(c, I.torso, lean, 0, 0)
+		E(c, I.arm_l_up, arm - lean, 0, 16); E(c, I.arm_r_up, arm - lean, 0, -16)
+		E(c, I.arm_l_low, elb, 0, 0); E(c, I.arm_r_low, elb, 0, 0)
+		flex(c, I.hand_l, 1, 30, 14); flex(c, I.hand_r, -1, 30, 14)
+		E(c, I.leg_l_up, keyed(k, PU_THL), 0, 8); E(c, I.leg_l_low, keyed(k, PU_SHL), 0, 0)
+		E(c, I.leg_r_up, keyed(k, PU_THR), 0, -8); E(c, I.leg_r_low, keyed(k, PU_SHR), 0, 0)
+		E(c, I.foot_l, -30, 0, 0); E(c, I.foot_r, -20, 0, 0)
+		headLook(c, I, a, 4, -lean - 10 + 6 * twitch(time, 0.8, seed), 0, 0)
+		E(c, I.jaw, 10 + 14 * pulse(k, 0.2, 0.8), 0, 0)
+		gmove(c, 0, keyed(k, PU_DROP), keyed(k, PU_BACK))
+	end
+
 	-- ---------------------------------------------------------------- locomotion: stalking walk <-> galloping run
 	-- walk (7 m/s): upright-ish, very long strides, head low and swaying, arms hanging and swinging loosely.
 	-- run (11 m/s): a violent hunched gallop: torso pitched far forward, hind legs bounding together, the long arms
@@ -552,6 +618,95 @@ do
 		gmove(c, 0, c.bodyDy, 0)
 	end
 
+	-- ---------------------------------------------------------------- climbing (Clamber's ladders / walls, ledges)
+	-- The wall is ahead (+z): the root is at the player's feet, who hang CL_WALL m off it. The body moves back by
+	-- CL_BACK (its chest is thicker than a human's); hands and feet are put on the wall by 2-bone IK (claws: the
+	-- wrists CL_HAND short of it), the reaching limb high, the other low, diagonally (the left arm with the right
+	-- leg); knees and elbows splayed out like a spider's (the limb's plane turned out by yaw).
+	local CL_WALL, CL_BACK, CL_DROP = 0.40, -0.34, -0.2
+	local CL_HAND, CL_FOOT = 0.18, 0.22                  -- m: wrists / ankles this far short of the wall
+	local CL_HI, CL_LO = 1.05, 0.2                      -- m: a wrist reaching high / pulling low, from the shoulder
+	local CL_FHI, CL_FLO = 0.95, 0.15                    -- m: an ankle high / low above the feet
+	local CL_AYAW, CL_LYAW = 12, 34                      -- deg: arms' / legs' planes turned out
+	local CL_LIFT = 0.18                                 -- m a moving hand / foot comes off the wall (mid-move)
+	-- one limb onto the wall: from its root joint (y, z in the body's frame before CL_BACK) to the target height ty,
+	-- its plane turned out by yaw; base = the limb's world pitch frame (the torso's lean for an arm, 0 for a leg)
+	local function wallLimb(c, up, low, tip, side, L1, L2, a10, a20, jy, jz, ty, short, lift, yaw, bend, base, isArm)
+		local cy = math.cos(yaw * RAD)
+		local dz = (CL_WALL - CL_BACK - short - lift - jz) / cy
+		local a1, a2 = ik2(L1, L2, dz, jy - ty, bend)
+		local tw = -(a1 - a10)
+		local sw = -(a2 - a20)
+		E(c, up, tw - base, side * yaw, isArm and side * 6 or side * 4)
+		E(c, low, sw - tw, 0, 0)
+		if isArm then flex(c, tip, side, 18, 14) else E(c, tip, -sw - 10, 0, 0) end
+	end
+	local function climbPose(c, a, I)
+		legGeom(c, I)
+		local ph, time, seed = a.phase, a.time, a.seed
+		local s = sin(ph)                                    -- (held as it is when still: the limbs stay where they grip)
+		local wl, wr = 0.5 + 0.5 * s, 0.5 - 0.5 * s           -- the left arm high / the right
+		local ml, mr = cos(ph), -cos(ph)                      -- moving (off the wall) mid-way
+		local lean = 3 + 1.5 * sin(time * 1.15 + seed)
+		E(c, I.torso, lean, 0, 4 * s)
+		local L = lean * RAD                                  -- the shoulders after the lean (about the torso's pivot)
+		local oy, oz = c.py[I.arm_l_up] - c.py[I.torso], c.pz[I.arm_l_up] - c.pz[I.torso]
+		local sy = c.py[I.torso] + oy * math.cos(L) - oz * math.sin(L)
+		local sz = c.pz[I.torso] + oy * math.sin(L) + oz * math.cos(L)
+		wallLimb(c, I.arm_l_up, I.arm_l_low, I.hand_l, 1, c.armL1, c.armL2, c.armA1, c.armA2, sy, sz,
+			sy + lerp(CL_LO, CL_HI, wl), CL_HAND, CL_LIFT * max(0, ml) * abs(ml), CL_AYAW, -1, lean, true)
+		wallLimb(c, I.arm_r_up, I.arm_r_low, I.hand_r, -1, c.armL1, c.armL2, c.armA1, c.armA2, sy, sz,
+			sy + lerp(CL_LO, CL_HI, wr), CL_HAND, CL_LIFT * max(0, mr) * abs(mr), CL_AYAW, -1, lean, true)
+		local hy, hz = c.py[I.leg_l_up], c.pz[I.leg_l_up]
+		wallLimb(c, I.leg_l_up, I.leg_l_low, I.foot_l, 1, c.legL1, c.legL2, c.legA1, c.legA2, hy - CL_DROP, hz,
+			lerp(CL_FLO, CL_FHI, wr) - CL_DROP, CL_FOOT, CL_LIFT * max(0, mr) * abs(mr), CL_LYAW, 1, 0, false)
+		wallLimb(c, I.leg_r_up, I.leg_r_low, I.foot_r, -1, c.legL1, c.legL2, c.legA1, c.legA2, hy - CL_DROP, hz,
+			lerp(CL_FLO, CL_FHI, wl) - CL_DROP, CL_FOOT, CL_LIFT * max(0, ml) * abs(ml), CL_LYAW, 1, 0, false)
+		headLook(c, I, a, -2, -lean - 12 + 6 * twitch(time, 0.8, seed), 18 * twitch(time, 0.5, seed + 3), 0)
+		E(c, I.jaw, 6 + 3 * sin(time * 1.15 + seed), 0, 0)
+		gmove(c, 0, CL_DROP, CL_BACK)
+	end
+	-- over a ledge ahead in a.dur s (k = t / dur): the claws on the edge (a.edgeH m above the feet, falling as the player
+	-- rises; nil: from k), pulling the chest over it (0.55), then a knee up onto it, crouched (1)
+	local PU_LEAN = {0, 6, 0.55, 52, 1, 40}
+	local PU_THL = {0, -30, 0.55, -55, 1, -110}              -- the left leg comes up onto the edge, the right trails
+	local PU_SHL = {0, 50, 0.55, 90, 1, 130}
+	local PU_THR = {0, -16, 0.55, -10, 1, -40}
+	local PU_SHR = {0, 26, 0.55, 40, 1, 72}
+	local PU_BACK = {0, CL_BACK, 0.55, -0.1, 1, 0}
+	local PU_DROP = {0, 0, 0.55, -0.35, 1, -0.3}
+	local PU_SIDES = {1, -1}
+	local PU_EDGE = {0, 1.8, 0.55, 0.5, 1, 0.05}              -- (no edge given: its height over the feet by k)
+	local function pullupPose(c, a, I)
+		legGeom(c, I)
+		local k = clamp(a.t / max(0.2, a.dur or 0.8), 0, 1)
+		local time, seed = a.time, a.seed
+		local lean = keyed(k, PU_LEAN)
+		local drop, back = keyed(k, PU_DROP), keyed(k, PU_BACK)
+		E(c, I.torso, lean, 0, 0)
+		local L = lean * RAD
+		local oy, oz = c.py[I.arm_l_up] - c.py[I.torso], c.pz[I.arm_l_up] - c.pz[I.torso]
+		local sy = c.py[I.torso] + oy * math.cos(L) - oz * math.sin(L) + drop
+		local sz = c.pz[I.torso] + oy * math.sin(L) + oz * math.cos(L) + back
+		local eh = a.edgeH or keyed(k, PU_EDGE)
+		local tz = CL_WALL + 0.25                            -- the claws just past the edge, on top
+		for _, sd in ipairs(PU_SIDES) do
+			local up, low, hand = I.arm_l_up, I.arm_l_low, I.hand_l
+			if sd < 0 then up, low, hand = I.arm_r_up, I.arm_r_low, I.hand_r end
+			local a1, a2 = ik2(c.armL1, c.armL2, (tz - sz) / math.cos(16 * RAD), sy - (eh + 0.12), -1)
+			local tw, sw = -(a1 - c.armA1), -(a2 - c.armA2)
+			E(c, up, tw - lean, sd * 16, sd * 8)
+			E(c, low, sw - tw, 0, 0)
+			flex(c, hand, sd, 34, 14)
+		end
+		E(c, I.leg_l_up, keyed(k, PU_THL), 8, 8); E(c, I.leg_l_low, keyed(k, PU_SHL), 0, 0)
+		E(c, I.leg_r_up, keyed(k, PU_THR), -8, -8); E(c, I.leg_r_low, keyed(k, PU_SHR), 0, 0)
+		E(c, I.foot_l, -30, 0, 0); E(c, I.foot_r, -20, 0, 0)
+		headLook(c, I, a, 4, -lean - 10 + 6 * twitch(time, 0.8, seed), 0, 0)
+		E(c, I.jaw, 10 + 14 * pulse(k, 0.2, 0.8), 0, 0)
+		gmove(c, 0, drop, back)
+	end
+
 	local function demon(c, a, I)
 		local st, t, ph, time, seed = a.st, a.t, a.phase, a.time, a.seed
 		c.snap = "feet"
@@ -563,6 +718,12 @@ do
 			locomotion(c, a, I, v)
 		elseif st == "crawl" then
 			crawlPose(c, a, I, clamp((a.speed or 0) / 1.0, 0, 1))
+		elseif st == "climb" then
+			c.snap = nil
+			climbPose(c, a, I)
+		elseif st == "pullup" then
+			c.snap = nil
+			pullupPose(c, a, I)
 		elseif st == "crouch" then
 			-- a low creep on its legs: knees deep, body bent far over, the long arms trailing to the floor
 			local hunch = 58
@@ -840,12 +1001,13 @@ do
 		if not HAS[A.st] then A.st = "idle" end
 		A.t, A.phase, A.speed = a.t or 0, a.phase or 0, a.speed or -1     -- (-1: not given)
 		A.look, A.time, A.seed = a.look or 0, a.time or 0, (a.seed or 0) % 97
+		A.dur, A.edgeH = a.dur or 0.8, a.edgeH
 		reset(c)
 		demon(c, A, c.idx)
 		solve(c)
 		if c.ikw > 0 then armPass(c, A, c.idx) solve(c) end        -- the run's claws planted by IK
 		local room = a.headroom
-		if room and A.st ~= "dead" then
+		if room and A.st ~= "dead" and A.st ~= "climb" and A.st ~= "pullup" then
 			local t0 = top(c)
 			if t0 > room then fitHeadroom(c, A, c.idx, room, t0, out) end
 		end

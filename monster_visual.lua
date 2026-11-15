@@ -138,12 +138,20 @@ local function mvAction(MV, m, now)
 	return nil
 end
 
-local function mvState(MV, m, speed, now)
+-- climbing (Clamber's ladders / walls / ledges, or our own mantle): ehClimbState's kind -> the pose ("" = an older
+-- Clamber that only says they climb: the crawl, as before)
+local CLIMB_POSE = {ladder = "climb", surface = "climb", mantle = "pullup", top = "pullup"}
+
+local function mvState(MV, m, speed, now, cs)
 	local ak, at = mvAction(MV, m, now)
 	if ak then return ak, at end
 	if MV.scream and now - MV.screamT0 < MONSTER_ANIM.scream then return "scream", now - MV.screamT0 end
 	local st
-	if mantleActive and mantleActive(m) then st = "crawl"
+	if cs then
+		st = CLIMB_POSE[cs.kind] or "crawl"
+		if st == "pullup" and cs.kind ~= MV.ck then MV.st = nil end   -- (a new pull-up: its own clock)
+		MV.ck = cs.kind
+	elseif mantleActive and mantleActive(m) then st = "crawl"
 	elseif not IsPlayerGrounded(m) then st = "run"
 	elseif GetPlayerCrouch(m) > 0.5 then st = "crouch"
 	elseif speed > 0.4 then st = "walk"
@@ -166,19 +174,26 @@ local function mvRenderOne(MV, m, screamN, dt)
 	local v = GetPlayerVelocity(m)
 	local speed = math.sqrt(v[1] * v[1] + v[3] * v[3])
 	local dist = MV.lastPos and VecLength(Vec(feet[1] - MV.lastPos[1], 0, feet[3] - MV.lastPos[3])) or 0
+	local dist3 = MV.lastPos and VecLength(VecSub(feet, MV.lastPos)) or 0
 	MV.lastPos = VecCopy(feet)
 	local headroom = mvHeadroom(MV, m, feet, dt)
-	local st, t = mvState(MV, m, speed, now)
+	local cs = ehClimbState and ehClimbState(m) or nil
+	local st, t = mvState(MV, m, speed, now, cs)
 	local a = MV.anim
-	if dist < 2 and IsPlayerGrounded(m) then                    -- (not across a teleport, not in the air)
+	if st == "climb" then                                       -- (up, down or sideways along the wall: the limbs' rhythm)
+		if dist3 < 2 then a.phase = (a.phase + dist3 / MONSTER_ANIM.climbStride * 2 * math.pi) % (2 * math.pi) end
+	elseif dist < 2 and IsPlayerGrounded(m) then                -- (not across a teleport, not in the air)
 		local stride = (st == "crawl") and MONSTER_ANIM.crawlStride or MonsterStride(speed, headroom)
 		a.phase = (a.phase + dist / math.max(0.3, stride) * 2 * math.pi) % (2 * math.pi)
 	end
 	a.st, a.t, a.speed, a.time, a.headroom = st, t, speed, now, headroom
+	a.dur = cs and cs.dur or nil
+	a.edgeH = (cs and cs.edge and cs.edge ~= 0) and math.max(0, cs.edge - feet[2]) or nil
 	a.look = 0
 	local ok = pcall(MonsterPose, a, MV.out)
 	if not ok then return end
-	local root = Transform(feet, QuatRotateQuat(tr.rot, QuatEuler(0, 180, 0)))   -- (the rig's +z forward = the player's -z)
+	local face = (st == "climb" or st == "pullup") and ehClimbFacing and ehClimbFacing(cs) or tr.rot   -- (into the wall)
+	local root = Transform(feet, QuatRotateQuat(face, QuatEuler(0, 180, 0)))   -- (the rig's +z forward = the player's -z)
 	local zero = Vec(0, 0, 0)
 	for _, q in ipairs(MV.parts) do mvCentre(q) end
 	for _, q in ipairs(MV.parts) do

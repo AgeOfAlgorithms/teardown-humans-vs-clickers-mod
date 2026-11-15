@@ -197,14 +197,21 @@ local function rejectOwn(m)
 	if MV_SHAPES and #MV_SHAPES > 0 then QueryRejectShapes(MV_SHAPES) end
 end
 
-local function crouchFactor(m)
+-- the boxes' height factor: lower while crouched, pulling up over a ledge or crawling (an older Clamber's climbing);
+-- upright on a ladder or wall (its model stands against it: monster_anim.lua's climb)
+local function crouchFactor(m, cs)
+	cs = cs or (ehClimbState and ehClimbState(m))
+	if cs and (cs.kind == "ladder" or cs.kind == "surface") then return 1 end
 	if (mantleActive and mantleActive(m)) or GetPlayerCrouch(m) > 0.5 then return 0.6 end
 	return 1
 end
 
 local function boxesPlace(m)
 	local tr = GetPlayerTransform(m)
-	local k = crouchFactor(m)
+	local cs = ehClimbState and ehClimbState(m) or nil
+	local k = crouchFactor(m, cs)
+	local face = cs and ehClimbFacing and ehClimbFacing(cs)        -- (climbing: they face the wall, as the model does)
+	if face then tr = Transform(tr.pos, face) end
 	for _, b in ipairs(CB[m].boxes) do
 		local c = b.hb.c
 		local local_ = Vec(c[1], c[2] * k, -c[3])               -- (the player's forward is -z)

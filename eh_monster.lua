@@ -67,6 +67,9 @@ JUMP_STAMINA = 0.8    -- s of the bar its big jump takes (AgeOfAlgorithms); with
 MSTEP_WALK = 1.8      -- m between the monster's footfalls walking (its stride: 3.6 m per cycle), everyone hears them
 MSTEP_RUN = 1.7       -- m running (feet and claws)
 MSTEP_CROUCH_VOL = 0.12   -- crouch-walking, its footfalls are barely there (AgeOfAlgorithms)
+-- climbing with Clamber (which plays no sounds for a monster: climbing.nosound): its claws gripping, every
+-- MSTEP_CLIMB m climbed (two grips per cycle of its limbs), and a heavier grip when it starts pulling up over a ledge
+MSTEP_CLIMB, MSTEP_CLIMB_VOL, MSTEP_PULL_VOL = 0.7, 0.45, 0.8
 -- its breathing (AgeOfAlgorithms): soft walking, harder and faster running, nothing crouched; idle a slow soft breath.
 -- {seconds between breaths, volume} by gait
 BREATH = {idle = {3.4, 0.25}, walk = {2.3, 0.45}, run = {0.85, 0.9}}
@@ -89,6 +92,9 @@ HEAR_APART = 1.5      -- m: not two of a window right next to each other (a loop
 BOOM_BASE, BOOM_PER_VOL, BOOM_MAX = 120, 40, 300
 PING_MIN, PING_MAX = 0.8, 4.0   -- s a heard noise's highlight lasts: weak (quiet, far) .. strong (loud, close)
 STEP_REACH_WALK, STEP_REACH_RUN = 10, 18   -- m footsteps are heard
+-- a human climbing (a ladder, a wall, pulling up onto a ledge: Clamber's or our own mantle) makes small sounds (the user):
+-- every CLIMB_EVERY s while moving, heard this far (between walking and running steps), quietly - crouching doesn't hush it
+CLIMB_EVERY, CLIMB_REACH, CLIMB_LOUD, CLIMB_SPEED = 0.6, 14, 0.4, 0.3
 -- humans' tools as noises: reach (m), loudness 0..1, clip = what it is (gun: a gun shape is drawn); hold = while held
 TOOL_NOISE = {
 	gun = {r = 120, loud = 0.8, clip = "gun"},            -- (guns, explosions, vehicles: about twice as far, AgeOfAlgorithms)
@@ -662,6 +668,25 @@ local function oneMonsterSounds(m, dt, acts, calls)
 				0.92 + math.random() * 0.12)
 		end
 	end
+	local cs = ehClimbState and ehClimbState(m) or nil
+	local ck = cs and not cs.own and cs.kind or ""                -- (our own mantle plays its own sounds; an older Clamber too)
+	if ck ~= "" then
+		ms.air, ms.fallV = false, 0                              -- (no landing thud for climbing off a wall)
+		if (ck == "mantle" or ck == "top") and ms.ck ~= ck then
+			PlaySound(snd.mstep, VecAdd(pos, Vec(0, 2.2, 0)), MSTEP_PULL_VOL, false, 0.75 + math.random() * 0.1)
+			hearMonster(m, "climb", MREACH_WALK, MSTEP_PULL_VOL)
+		elseif ck == "ladder" or ck == "surface" then
+			ms.dist = ms.dist + VecLength(v) * dt
+			if ms.dist >= MSTEP_CLIMB then
+				ms.dist = 0
+				PlaySound(snd.mstep, VecAdd(pos, Vec(0, 2.6, 0)), MSTEP_CLIMB_VOL, false, 1.05 + math.random() * 0.2)
+				hearMonster(m, "climb", MREACH_WALK, MSTEP_CLIMB_VOL)
+			end
+		end
+		ms.ck = ck
+		return
+	end
+	ms.ck = ""
 	if not IsPlayerGrounded(m) then
 		ms.air = true
 		ms.fallV = math.min(ms.fallV, v[2])
@@ -1280,7 +1305,18 @@ function ehClientTick(dt, ms)
 		local v = GetPlayerVelocity(p)
 		local speed = math.sqrt(v[1] * v[1] + v[3] * v[3])
 		local crouched = GetPlayerCrouch(p) > 0.5
-		if speed > STEP_SPEED and not crouched and IsPlayerGrounded(p) and GetPlayerHealth(p) > 0 then
+		if mantleActive(p) and GetPlayerHealth(p) > 0 then          -- climbing: small sounds while moving (still on a ladder: none)
+			if VecLength(v) > CLIMB_SPEED and now >= (steps[p] or 0) then
+				steps[p] = now + CLIMB_EVERY
+				local at = GetPlayerTransform(p).pos
+				local dist = VecLength(VecSub(at, eye))
+				if dist <= CLIMB_REACH then
+					local st = noiseStrength(dist, CLIMB_REACH, CLIMB_LOUD)
+					addPose(capturePose(p, Vec(0, 0, 0)) or standPose(at), st, GLOW, nil, nil, p)
+					if EH_HEARD then EH_HEARD("climb", dist, st) end
+				end
+			end
+		elseif speed > STEP_SPEED and not crouched and IsPlayerGrounded(p) and GetPlayerHealth(p) > 0 then
 			if now >= (steps[p] or 0) then
 				local running = speed > 5
 				steps[p] = now + (running and 0.35 or 0.55)
@@ -1903,7 +1939,9 @@ local function monsterMove(dt, p, st, now)
 		if st.exhausted and st.stamina >= STAMINA * EXHAUSTED_UNTIL then st.exhausted = false end
 	end
 	st.run = run and true or false
-	SetPlayerParam("walkingSpeed", (run and MONSTER_RUN or MONSTER_WALK) * ehHitSlow(p), p)   -- (one frame: every tick; a hit slows it)
+	if not ehClimbOn(p) then                                     -- (Climbing holds a climber's walkingSpeed at 0)
+		SetPlayerParam("walkingSpeed", (run and MONSTER_RUN or MONSTER_WALK) * ehHitSlow(p), p)   -- (one frame: every tick; a hit slows it)
+	end
 	if ehInWater(p) and GetPlayerHealth(p) > 0 and not mantleActive(p) then   -- (AgeOfAlgorithms: "excellent swimmers") where it
 		local eye = GetPlayerEyeTransform(p)                     --  looks, fast; jump rises, crouch dives
 		local f = (InputDown("up", p) and 1 or 0) - (InputDown("down", p) and 1 or 0)

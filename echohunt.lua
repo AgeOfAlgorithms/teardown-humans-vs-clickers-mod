@@ -678,6 +678,18 @@ local function chatHint()
 	UiPop()
 end
 
+-- the host, in the lobby, without Clamber (the separate climbing mod, mantle.lua's hand-over): where ladders come from
+local function climbHint()
+	if not IsPlayerHost(GetLocalPlayer()) or GetBool("climbing.present") then return end
+	UiPush()
+	UiTranslate(40, UiHeight() - 70)
+	UiAlign("left middle")
+	UiFont("regular.ttf", 20)
+	UiColor(1, 1, 1, 0.6)
+	UiText("Ladders and climbable walls: enable Clamber (Steam Workshop) under Global mods")
+	UiPop()
+end
+
 -- while this player types in the chat, the lobby / results are not drawn at all: the game mode draws after the chat
 -- mod, so its windows covered the chat box, and mplib's windows (interactive UI) kept the mouse and keys - the chat's
 -- text field never got them, not even Enter / Esc: stuck until a force quit (AgeOfAlgorithms). Only a line at the top instead.
@@ -716,6 +728,7 @@ function client.draw(dt)
 		end
 		UiPop()
 		chatHint()
+		climbHint()
 		if opening then SetBool("proxchat.open", true) end
 		return
 	end

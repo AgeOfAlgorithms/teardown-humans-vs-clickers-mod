@@ -8,6 +8,11 @@
 -- mantle. Server, 60 Hz: probe rays from the feet up along the way you move, a ray down onto the ledge top, headroom
 -- checks, then the player is driven by velocity: up the face, then over the edge (centred on thin beams).
 -- Every client: the game's own jump-landing pose on the climber (its locomotion's override hook), a first-person dip.
+--
+-- Climbing (a separate global mod: ladders, climbable walls and its own mantle, for everyone) takes over when the host
+-- runs it (climbing.present); this mantle is then off and stays the fallback without it. Its rays skip our layers
+-- (climbing.raymask), the monster gets its reach (climbing.reach.<p>), the downed and the goo-trapped are blocked
+-- (climbing.block.<p>), and its climbing.on.<p> counts as mantling (mantleActive) on every machine.
 
 MANTLE_MIN_RISE = 0.35         -- lower ledges: the normal step-up / landing handles them
 MANTLE_MIN_RISE_GROUND = 0.55
@@ -18,6 +23,14 @@ MANTLE_UP_TIME = 0.16          -- s, plus MANTLE_UP_PER_M per metre of rise (slo
 MANTLE_UP_PER_M = 0.18
 MANTLE_OVER_SPEED = 3.0
 MANTLE_CLIP = "jump_land"      -- reads as a pull-up (picked in-game for Tall Order, 2026-10-01)
+CLIMB_RAYMASK = 128 + 32       -- Climbing's rays skip the hit boxes and the monster's model parts / the goo cans
+CLIMB_PLAYER_MASK = 255 - 128 - 32 - 4   -- (layer 4: Climbing's ladder rungs, which it takes out of every player's mask)
+-- Clamber's per-climber state (newer versions; an older one publishes only climbing.on): what they are on, the way they
+-- face into it, a pull-up's edge height and duration. A monster's climbing is ours to draw and sound (its character is
+-- hidden): Clamber leaves its character and its sounds alone (noanim / nosound, set by the host)
+CLIMB_KEY = {kind = "climbing.kind.", dx = "climbing.dirx.", dy = "climbing.diry.", dz = "climbing.dirz.",
+	edge = "climbing.edge.", dur = "climbing.dur.", noanim = "climbing.noanim.", nosound = "climbing.nosound.",
+	height = "climbing.mantleheight"}
 
 -- how high player p can grab: the game decides (the 3.6 m monster: 2.6 m, its chest; eh_monster.lua)
 function mantleReach(p) return MANTLE_MAX_RISE end   -- (the including script may override it after this file)
@@ -153,8 +166,53 @@ local function driveMantle(p, m, feet, dt)
 	SetPlayerVelocity(VecAdd(VecScale(dir, sp), Vec(0, vy, 0)), p)
 end
 
+local CL = {seen = false, pollT = 0, reach = {}, block = {}, mon = {}}
+
+-- (server.update) Climbing found yet? Polled every second (another mod's init can run after ours), seen for the
+-- session; then its per-player keys are kept up to date (only on changes) and true is returned: this mantle is off
+local function climbHandOver(dt)
+	CL.pollT = CL.pollT - dt
+	if not CL.seen and CL.pollT <= 0 then
+		CL.pollT = 1
+		if GetBool("climbing.present") then
+			CL.seen = true
+			shared.ehClimbing = true
+			PLAYER_MASK = CLIMB_PLAYER_MASK                       -- (eh_combat.lua re-sets the mask when it differs)
+			for p, m in pairs(M.players) do if m.active then endMantle(p, m, 0.2, GetPlayerVelocity(p)) end end
+		end
+	end
+	if not CL.seen then return false end
+	if GetInt("climbing.raymask") ~= CLIMB_RAYMASK then SetInt("climbing.raymask", CLIMB_RAYMASK, true) end   -- (clients' rays too)
+	-- the host's Mantle height option in Clamber (climbing.mantleheight; older versions: none, 1.4 m): humans get it from
+	-- Clamber itself, a taller reach (the clicker's 2.6 m) scales with it (2.6 x option / 1.4)
+	local mh = GetFloat(CLIMB_KEY.height)
+	local scale = (mh > 0 and mh or MANTLE_MAX_RISE) / MANTLE_MAX_RISE
+	for p in Players() do
+		local r = mantleReach(p)
+		local block = r <= 0 or ehGooTrapped(p)
+		local reach = (not block and r > MANTLE_MAX_RISE) and r * scale or 0   -- (0: Climbing's own human reach)
+		if CL.reach[p] ~= reach then CL.reach[p] = reach; SetFloat("climbing.reach." .. p, reach) end
+		if CL.block[p] ~= block then CL.block[p] = block; SetBool("climbing.block." .. p, block) end
+		local mon = ehIsMonster ~= nil and ehIsMonster(p) == true
+		if CL.mon[p] ~= mon then
+			CL.mon[p] = mon
+			SetBool(CLIMB_KEY.noanim .. p, mon, true)                -- (read on every machine: synced)
+			SetBool(CLIMB_KEY.nosound .. p, mon, true)
+		end
+	end
+	for p in PlayersRemoved() do
+		CL.reach[p], CL.block[p], CL.mon[p] = nil, nil, nil
+		SetFloat("climbing.reach." .. p, 0)
+		SetBool("climbing.block." .. p, false)
+		SetBool(CLIMB_KEY.noanim .. p, false, true)
+		SetBool(CLIMB_KEY.nosound .. p, false, true)
+	end
+	return true
+end
+
 -- server.update (60 Hz)
 function mantleServerUpdate(dt)
+	if climbHandOver(dt) then return end
 	for p in Players() do
 		local m = M.players[p]
 		if not m then m = {cool = 0}; M.players[p] = m end
@@ -183,8 +241,51 @@ function mantleServerUpdate(dt)
 	for p in PlayersRemoved() do M.players[p] = nil end
 end
 
--- is player p mantling (any machine)?
-function mantleActive(p) return shared.mantle ~= nil and shared.mantle[p] ~= nil end
+-- is player p on Climbing's ladder / wall or in its mantle (any machine)?
+function ehClimbOn(p) return shared.ehClimbing == true and GetBool("climbing.on." .. p) end
+
+-- is player p mantling (any machine)? (or climbing with Climbing)
+function mantleActive(p) return (shared.mantle ~= nil and shared.mantle[p] ~= nil) or ehClimbOn(p) end
+
+-- what player p is climbing (any machine), for the monster's model, hit boxes and sounds: nil when not climbing, else
+-- {kind, dir, edge, dur}: kind "ladder" | "surface" | "mantle" | "top" (over a ladder's top) | "" (an older Clamber that
+-- says only that they climb); dir = the way they face into it (a unit Vec, or nil); edge = a pull-up's edge height
+-- (world y), dur = its duration (s). Our own mantle gives the same as Clamber's. (One table per call site is fine:
+-- callers keep it a frame)
+local CSC = {}                                                -- [p] = {t, s}: one answer per player per frame
+local function climbState(p)
+	local d = shared.mantle and shared.mantle[p]
+	if d then return {kind = "mantle", dir = d.dir, edge = d.edge and d.edge[2], dur = d.dur, own = true} end
+	if not ehClimbOn(p) then return nil end
+	local kind = GetString(CLIMB_KEY.kind .. p)
+	-- (1.0.4 writes the key for every player: "" with climbing.on is only the one update between the two keys arriving,
+	-- not a climb to draw; a missing key is an older Clamber that says only that they climb)
+	if kind == "" and HasKey(CLIMB_KEY.kind .. p) then return nil end
+	local s = {kind = kind}
+	local x, y, z = GetFloat(CLIMB_KEY.dx .. p), GetFloat(CLIMB_KEY.dy .. p), GetFloat(CLIMB_KEY.dz .. p)
+	local l = math.sqrt(x * x + y * y + z * z)
+	if l > 0.1 then s.dir = Vec(x / l, y / l, z / l) end
+	if kind == "mantle" or kind == "top" then
+		s.edge, s.dur = GetFloat(CLIMB_KEY.edge .. p), GetFloat(CLIMB_KEY.dur .. p)
+		if s.dur <= 0 then s.dur = 0.8 end
+	end
+	return s
+end
+function ehClimbState(p)
+	local now = GetTime()
+	local e = CSC[p]
+	if e and e.t == now then return e.s end
+	if not e then e = {}; CSC[p] = e end
+	e.t, e.s = now, climbState(p)
+	return e.s
+end
+
+-- the player-style rotation (-z forward, upright) facing horizontally along climb state s's dir, or nil
+function ehClimbFacing(s)
+	local d = s and s.dir
+	if not d or d[1] * d[1] + d[3] * d[3] < 0.01 then return nil end
+	return QuatLookAt(Vec(0, 0, 0), Vec(d[1], 0, d[3]))
+end
 
 local A = {}                                                  -- per player on this machine: {n, t0, on}
 
