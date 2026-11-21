@@ -822,6 +822,15 @@ local function chatTyping() return GetBool("proxchat.typing." .. GetLocalPlayer(
 -- (true on the frame Enter opens it: the lobby's buttons take Enter as menu_accept too - they must not get it)
 local function lobbyChatOpening() return chatAlive() and not chatTyping() and InputPressed("return") end
 
+-- push to talk through those screens too (and a clicker's open upgrade shop): they take the talk key from the chat as
+-- well, so it is handed over through Proximity Comms' API 24 (proxchat.talk, set every frame the key is down, read and
+-- cleared by the chat; an older chat ignores it). proxchat.key.talk is "" while Koetama isn't running.
+local function talkThrough()
+	if not chatAlive() or chatTyping() then return end
+	local tk = GetString("proxchat.key.talk")
+	if tk ~= "" and InputDown(tk) then SetBool("proxchat.talk", true) end
+end
+
 local function chatHint()
 	if not chatAlive() or chatTyping() then return end
 	UiPush()
@@ -860,6 +869,8 @@ local function chattingNote()
 end
 
 function client.draw(dt)
+	local e0 = shared.eh                                         -- (the lobby, the results, an open upgrade shop: interactive)
+	if not teamsIsSetup() or (e0 and e0.phase == "over") or (ehUpOpen and ehUpOpen()) then talkThrough() end
 	if not teamsIsSetup() then
 		local typing = chatAlive() and chatTyping()
 		local opening = lobbyChatOpening()
